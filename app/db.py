@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -21,6 +22,9 @@ class BookingDraft:
     shoot_type: Optional[str]
     comment: Optional[str]
     policy_version: str
+    hour_price: int
+    total_price: int
+    currency: str
 
 
 class Database:
@@ -209,11 +213,13 @@ class Database:
                     INSERT INTO bookings (
                         user_tg_id, username, city_id, booking_date, status,
                         tg_contact, client_name, phone, shoot_type, comment,
-                        policy_version, consent_accepted
+                        policy_version, consent_accepted,
+                        hour_price, total_price, currency
                     ) VALUES (
                         $1, $2, $3, $4, 'pending',
                         $5, $6, $7, $8, $9,
-                        $10, TRUE
+                        $10, TRUE,
+                        $11, $12, $13
                     )
                     RETURNING id
                     """,
@@ -227,6 +233,9 @@ class Database:
                     draft.shoot_type,
                     draft.comment,
                     draft.policy_version,
+                    draft.hour_price,
+                    draft.total_price,
+                    draft.currency,
                 )
 
                 for hour in sorted(draft.hours):
@@ -253,7 +262,7 @@ class Database:
                     """,
                     booking_id,
                     draft.user_tg_id,
-                    str(draft.hours),
+                    json.dumps(draft.hours),
                 )
         return int(booking_id)
 
@@ -261,7 +270,8 @@ class Database:
         return await self.pool.fetch(
             """
             SELECT b.id, b.user_tg_id, b.username, b.booking_date, b.client_name, b.phone,
-                   b.shoot_type, b.comment, b.tg_contact, c.name AS city_name,
+                   b.shoot_type, b.comment, b.tg_contact, b.total_price, b.currency,
+                   c.name AS city_name,
                    ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
             FROM bookings b
             JOIN cities c ON c.id = b.city_id
@@ -302,6 +312,7 @@ class Database:
         return await self.pool.fetchrow(
             """
             SELECT b.id, b.user_tg_id, b.status, b.booking_date, c.name AS city_name,
+                   b.hour_price, b.total_price, b.currency,
                    ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
             FROM bookings b
             JOIN cities c ON c.id = b.city_id
@@ -338,16 +349,38 @@ class Database:
         return await self.pool.fetch(
             """
             SELECT b.id, b.status, b.booking_date, c.name AS city_name,
+                   b.total_price, b.currency,
                    ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
             FROM bookings b
             JOIN cities c ON c.id = b.city_id
             JOIN booking_slots bs ON bs.booking_id = b.id
             WHERE b.user_tg_id = $1
+              AND b.status <> 'archived'
             GROUP BY b.id, c.name
             ORDER BY b.booking_date DESC
             LIMIT 20
             """,
             user_tg_id,
+        )
+
+    async def get_pricing(self) -> asyncpg.Record:
+        return await self.pool.fetchrow(
+            "SELECT hourly_price, currency FROM pricing_settings WHERE id = 1"
+        )
+
+    async def set_pricing(self, hourly_price: int, updated_by: int) -> None:
+        await self.pool.execute(
+            """
+            INSERT INTO pricing_settings (id, hourly_price, currency, updated_by, updated_at)
+            VALUES (1, $1, 'RUB', $2, NOW())
+            ON CONFLICT (id)
+            DO UPDATE SET hourly_price = EXCLUDED.hourly_price,
+                          currency = EXCLUDED.currency,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            """,
+            hourly_price,
+            updated_by,
         )
 
     async def schedule_preview(self, days: int = 21, limit: int = 15) -> List[asyncpg.Record]:
@@ -468,3 +501,119 @@ class Database:
     async def active_admin_ids(self) -> List[int]:
         rows = await self.pool.fetch("SELECT tg_id FROM admins")
         return [int(r["tg_id"]) for r in rows]
+
+    async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int | None = None) -> int:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                targets = await conn.fetch(
+                    """
+                    WITH last_slots AS (
+                        SELECT b.id,
+                               b.status,
+                               MAX(bs.hour) AS max_hour
+                        FROM bookings b
+                        JOIN booking_slots bs ON bs.booking_id = b.id
+                        WHERE b.status <> 'archived'
+                        GROUP BY b.id, b.status
+                    )
+                    SELECT b.id, b.status
+                    FROM bookings b
+                    JOIN last_slots ls ON ls.id = b.id
+                    WHERE (b.booking_date::timestamp + ((ls.max_hour + 1)::text || ' hour')::interval)
+                          <= timezone($1, NOW())
+                    """,
+                    timezone_name,
+                )
+                if not targets:
+                    return 0
+
+                for row in targets:
+                    booking_id = int(row["id"])
+                    prev_status = str(row["status"])
+                    snapshot = await conn.fetchval(
+                        """
+                        SELECT jsonb_build_object(
+                            'booking', to_jsonb(b),
+                            'city_name', c.name,
+                            'slots', COALESCE(
+                                (
+                                    SELECT jsonb_agg(to_jsonb(s) ORDER BY s.hour)
+                                    FROM (
+                                        SELECT slot_date, hour
+                                        FROM booking_slots
+                                        WHERE booking_id = b.id
+                                    ) s
+                                ),
+                                '[]'::jsonb
+                            )
+                        )
+                        FROM bookings b
+                        JOIN cities c ON c.id = b.city_id
+                        WHERE b.id = $1
+                        """,
+                        booking_id,
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO booking_archive_snapshots (booking_id, snapshot, archived_by)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (booking_id)
+                        DO UPDATE SET snapshot = EXCLUDED.snapshot,
+                                      archived_at = NOW(),
+                                      archived_by = EXCLUDED.archived_by
+                        """,
+                        booking_id,
+                        snapshot,
+                        actor_tg_id,
+                    )
+                    await conn.execute(
+                        "UPDATE bookings SET status = 'archived', updated_at = NOW() WHERE id = $1",
+                        booking_id,
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO booking_events_audit (booking_id, event_type, actor_tg_id, payload)
+                        VALUES ($1, 'booking_archived', $2, jsonb_build_object('prev_status', $3))
+                        """,
+                        booking_id,
+                        actor_tg_id,
+                        prev_status,
+                    )
+                return len(targets)
+
+    async def list_archived(self, limit: int = 20) -> List[asyncpg.Record]:
+        return await self.pool.fetch(
+            """
+            SELECT b.id,
+                   b.booking_date,
+                   c.name AS city_name,
+                   bas.archived_at,
+                   ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+            FROM bookings b
+            JOIN cities c ON c.id = b.city_id
+            JOIN booking_slots bs ON bs.booking_id = b.id
+            LEFT JOIN booking_archive_snapshots bas ON bas.booking_id = b.id
+            WHERE b.status = 'archived'
+            GROUP BY b.id, c.name, bas.archived_at
+            ORDER BY b.booking_date DESC, b.id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    async def get_archive_snapshot(self, booking_id: int) -> Optional[asyncpg.Record]:
+        return await self.pool.fetchrow(
+            """
+            SELECT booking_id, snapshot, archived_at
+            FROM booking_archive_snapshots
+            WHERE booking_id = $1
+            """,
+            booking_id,
+        )
+
+    async def delete_archive_snapshot(self, booking_id: int) -> bool:
+        result = await self.pool.execute(
+            "DELETE FROM booking_archive_snapshots WHERE booking_id = $1",
+            booking_id,
+        )
+        return result.endswith("1")

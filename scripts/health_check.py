@@ -21,6 +21,8 @@ REQUIRED_TABLES = [
     "booking_events_audit",
     "consents",
     "notification_log",
+    "booking_archive_snapshots",
+    "pricing_settings",
 ]
 
 

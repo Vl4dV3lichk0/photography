@@ -8,7 +8,7 @@ from aiogram import Bot
 
 from app.config import Settings
 from app.db import Database
-from app.texts import format_hours
+from app.texts import format_slots
 
 
 async def _send_reminders(bot: Bot, db: Database) -> None:
@@ -18,7 +18,7 @@ async def _send_reminders(bot: Bot, db: Database) -> None:
             text = (
                 f"Напоминание: фотосессия через {hours_before} ч.\n"
                 f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
-                f"Часы: {format_hours(row['hours'])}"
+                f"Часы: {format_slots(row['hours'])}"
             )
             await bot.send_message(row["user_tg_id"], text)
             await db.mark_notified(f"reminder_{hours_before}", row["id"], row["user_tg_id"])
@@ -36,7 +36,7 @@ async def _send_daily_summary(bot: Bot, db: Database, settings: Settings) -> Non
         body = [f"Сводка на {target_date.strftime('%d.%m.%Y')}"]
         for row in rows:
             body.append(
-                f"- #{row['id']} {row['city_name']} {format_hours(row['hours'])} ({row['status']})"
+                f"- #{row['id']} {row['city_name']} {format_slots(row['hours'])} ({row['status']})"
             )
         text = "\n".join(body)
     else:
@@ -52,6 +52,7 @@ async def _send_daily_summary(bot: Bot, db: Database, settings: Settings) -> Non
 async def notifications_loop(bot: Bot, db: Database, settings: Settings) -> None:
     while True:
         try:
+            await db.archive_expired_bookings(settings.timezone, None)
             await _send_reminders(bot, db)
             await _send_daily_summary(bot, db, settings)
         except Exception:

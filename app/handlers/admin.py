@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from aiogram import Dispatcher, F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app.db import Database
-from app.keyboards import admin_menu_kb, cities_kb, pending_action_kb
-from app.states import AdminAddCityState, AdminBlockState, AdminWorkingWindowState
-from app.texts import format_hours
+from app.keyboards import (
+    admin_menu_kb,
+    archive_delete_confirm_kb,
+    archived_item_kb,
+    cities_kb,
+    pending_action_kb,
+)
+from app.states import (
+    AdminAddCityState,
+    AdminArchiveState,
+    AdminBlockState,
+    AdminPriceState,
+    AdminWorkingWindowState,
+)
+from app.texts import format_price_offer, format_slots
 
 router = Router()
 
@@ -24,6 +38,13 @@ def _parse_hours(raw: str) -> tuple[int, int]:
     if start < 0 or end > 24 or end <= start:
         raise ValueError("Некорректный диапазон")
     return start, end
+
+
+def _parse_price(raw: str) -> int:
+    value = int(raw.strip())
+    if value < 0:
+        raise ValueError("Цена не может быть отрицательной")
+    return value
 
 
 async def _ensure_admin(callback: CallbackQuery, db: Database) -> bool:
@@ -181,12 +202,13 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
             f"Заявка #{row['id']}\n"
             f"Город: {row['city_name']}\n"
             f"Дата: {row['booking_date'].strftime('%d.%m.%Y')}\n"
-            f"Часы: {format_hours(row['hours'])}\n"
+            f"Часы: {format_slots(row['hours'])}\n"
             f"Контакт: {row['tg_contact']}\n"
             f"Имя: {row['client_name'] or '-'}\n"
             f"Телефон: {row['phone'] or '-'}\n"
             f"Тип съемки: {row['shoot_type'] or '-'}\n"
-            f"Комментарий: {row['comment'] or '-'}"
+            f"Комментарий: {row['comment'] or '-'}\n"
+            f"Итог: {row['total_price']} {row['currency']}"
         )
         await callback.message.answer(txt, reply_markup=pending_action_kb(row["id"]))
     await callback.answer()
@@ -208,7 +230,8 @@ async def admin_approve(callback: CallbackQuery, db: Database) -> None:
             (
                 f"Ваша запись #{booking_id} подтверждена\n"
                 f"{booking['city_name']} {booking['booking_date'].strftime('%d.%m.%Y')}\n"
-                f"Часы: {format_hours(booking['hours'])}"
+                f"Часы: {format_slots(booking['hours'])}\n"
+                f"Итог: {booking['total_price']} {booking['currency']}"
             ),
         )
     await callback.message.answer(f"Заявка #{booking_id} подтверждена")
@@ -231,6 +254,126 @@ async def admin_reject(callback: CallbackQuery, db: Database) -> None:
             f"К сожалению, заявка #{booking_id} отклонена. Выберите другое время через /start.",
         )
     await callback.message.answer(f"Заявка #{booking_id} отклонена")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:set_price")
+async def admin_set_price_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    pricing = await db.get_pricing()
+    await state.set_state(AdminPriceState.waiting_hour_price)
+    await callback.message.answer(
+        (
+            f"Текущая цена: {pricing['hourly_price']} {pricing['currency']}\n"
+            "Введите новую цену за 1 час (целое число, рубли)."
+        )
+    )
+    await callback.answer()
+
+
+@router.message(AdminPriceState.waiting_hour_price)
+async def admin_set_price_save(message: Message, state: FSMContext, db: Database) -> None:
+    try:
+        price = _parse_price(message.text)
+    except Exception:
+        await message.answer("Введите корректную цену, например 5000")
+        return
+
+    await db.set_pricing(price, message.from_user.id)
+    await state.clear()
+    await message.answer(format_price_offer(price, "RUB"), reply_markup=admin_menu_kb())
+
+
+@router.message(Command("archive_now"))
+async def cmd_archive_now(message: Message, db: Database, settings) -> None:
+    if not await db.is_admin(message.from_user.id):
+        await message.answer("У вас нет доступа.")
+        return
+    archived = await db.archive_expired_bookings(settings.timezone, message.from_user.id)
+    await message.answer(f"Архивация завершена. Перенесено: {archived}")
+
+
+@router.callback_query(F.data == "admin:archive:run")
+async def admin_archive_run(callback: CallbackQuery, db: Database, settings) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    archived = await db.archive_expired_bookings(settings.timezone, callback.from_user.id)
+    await callback.message.answer(f"Архивация завершена. Перенесено: {archived}")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:archive:list")
+async def admin_archive_list(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await state.clear()
+    rows = await db.list_archived(limit=15)
+    if not rows:
+        await callback.message.answer("Архив пуст.")
+        await callback.answer()
+        return
+
+    for row in rows:
+        archived_at = row["archived_at"].strftime("%d.%m.%Y %H:%M") if row["archived_at"] else "-"
+        await callback.message.answer(
+            (
+                f"Архив #{row['id']}\n"
+                f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
+                f"Часы: {format_slots(row['hours'])}\n"
+                f"Архивировано: {archived_at}"
+            ),
+            reply_markup=archived_item_kb(row["id"]),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:archive:download:"))
+async def admin_archive_download(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    booking_id = int(callback.data.split(":")[-1])
+    row = await db.get_archive_snapshot(booking_id)
+    if not row:
+        await callback.answer("Снимок не найден", show_alert=True)
+        return
+
+    payload = json.dumps(row["snapshot"], ensure_ascii=False, indent=2).encode("utf-8")
+    file = BufferedInputFile(payload, filename=f"archive_booking_{booking_id}.json")
+    await callback.message.answer_document(file, caption=f"Архив заявки #{booking_id}")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:archive:delete:"))
+async def admin_archive_delete_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    booking_id = int(callback.data.split(":")[-1])
+    await state.set_state(AdminArchiveState.waiting_delete_confirmation)
+    await state.update_data(delete_booking_id=booking_id)
+    await callback.message.answer(
+        f"Удалить архивный снимок #{booking_id}? Это действие необратимо.",
+        reply_markup=archive_delete_confirm_kb(booking_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:archive:confirm_delete:"))
+async def admin_archive_delete_confirm(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    booking_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    if int(data.get("delete_booking_id", 0)) != booking_id:
+        await callback.answer("Подтверждение устарело", show_alert=True)
+        return
+
+    deleted = await db.delete_archive_snapshot(booking_id)
+    await state.clear()
+    if deleted:
+        await callback.message.answer(f"Архивный снимок #{booking_id} удален.")
+    else:
+        await callback.message.answer("Архивный снимок не найден.")
     await callback.answer()
 
 

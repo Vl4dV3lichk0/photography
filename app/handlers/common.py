@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from aiogram import Dispatcher, Router
+from aiogram import Dispatcher, F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from app.db import Database
 from app.keyboards import admin_menu_kb, main_menu_kb
-from app.texts import format_schedule_preview
+from app.texts import format_price_offer, format_start_message
 
 router = Router()
 
@@ -14,7 +14,30 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message, db: Database) -> None:
     rows = await db.schedule_preview(days=90, limit=15)
-    await message.answer(format_schedule_preview(rows), reply_markup=main_menu_kb())
+    pricing = await db.get_pricing()
+    await message.answer(
+        format_start_message(rows, pricing["hourly_price"], pricing["currency"]),
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(Command("price"))
+async def cmd_price(message: Message, db: Database) -> None:
+    pricing = await db.get_pricing()
+    await message.answer(
+        format_price_offer(pricing["hourly_price"], pricing["currency"]),
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.callback_query(F.data == "info:price")
+async def cb_price(callback: CallbackQuery, db: Database) -> None:
+    pricing = await db.get_pricing()
+    await callback.message.answer(
+        format_price_offer(pricing["hourly_price"], pricing["currency"]),
+        reply_markup=main_menu_kb(),
+    )
+    await callback.answer()
 
 
 @router.message(Command("help"))
@@ -22,8 +45,10 @@ async def cmd_help(message: Message) -> None:
     await message.answer(
         "Команды:\n"
         "/start - расписание и запись\n"
+        "/price - прайс\n"
         "/my - мои записи\n"
-        "/admin - панель администратора"
+        "/admin - панель администратора\n"
+        "/archive_now - ручная архивация (для админов)"
     )
 
 

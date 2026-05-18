@@ -41,6 +41,8 @@ EXCEPTION
     WHEN duplicate_object THEN NULL;
 END $$;
 
+ALTER TYPE booking_status ADD VALUE IF NOT EXISTS 'archived';
+
 CREATE TABLE IF NOT EXISTS bookings (
     id BIGSERIAL PRIMARY KEY,
     user_tg_id BIGINT NOT NULL,
@@ -55,6 +57,9 @@ CREATE TABLE IF NOT EXISTS bookings (
     comment TEXT,
     policy_version TEXT NOT NULL,
     consent_accepted BOOLEAN NOT NULL DEFAULT FALSE,
+    hour_price INTEGER NOT NULL DEFAULT 0,
+    total_price INTEGER NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'RUB',
     confirmed_by BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -72,7 +77,7 @@ CREATE TABLE IF NOT EXISTS booking_slots (
 
 CREATE TABLE IF NOT EXISTS booking_events_audit (
     id BIGSERIAL PRIMARY KEY,
-    booking_id BIGINT REFERENCES bookings(id) ON DELETE CASCADE,
+    booking_id BIGINT REFERENCES bookings(id) ON DELETE SET NULL,
     event_type TEXT NOT NULL,
     actor_tg_id BIGINT,
     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -94,3 +99,27 @@ CREATE TABLE IF NOT EXISTS notification_log (
     sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(kind, ref_id, sent_to)
 );
+
+CREATE TABLE IF NOT EXISTS booking_archive_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    booking_id BIGINT UNIQUE NOT NULL,
+    snapshot JSONB NOT NULL,
+    archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    archived_by BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS pricing_settings (
+    id INTEGER PRIMARY KEY,
+    hourly_price INTEGER NOT NULL CHECK (hourly_price >= 0),
+    currency TEXT NOT NULL DEFAULT 'RUB',
+    updated_by BIGINT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO pricing_settings (id, hourly_price, currency)
+VALUES (1, 5000, 'RUB')
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS hour_price INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_price INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'RUB';

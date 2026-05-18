@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date
 
 from aiogram import Dispatcher, F, Router
@@ -11,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from app.config import Settings
 from app.db import BookingDraft, Database
 from app.keyboards import (
+    back_only_kb,
     cancel_my_booking_kb,
     cities_kb,
     consent_kb,
@@ -18,9 +18,10 @@ from app.keyboards import (
     main_menu_kb,
     months_kb,
     days_kb,
+    skip_or_back_kb,
 )
 from app.states import ClientBookingState
-from app.texts import POLICY_TEXT, format_hours
+from app.texts import POLICY_TEXT, format_slots
 
 router = Router()
 
@@ -47,7 +48,8 @@ async def _show_my_bookings(message: Message, db: Database) -> None:
             f"Запись #{row['id']}\n"
             f"Статус: {row['status']}\n"
             f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
-            f"Часы: {format_hours(row['hours'])}"
+            f"Часы: {format_slots(row['hours'])}\n"
+            f"Итог: {row['total_price']} {row['currency']}"
         )
         if row["status"] in ("pending", "confirmed"):
             await message.answer(txt, reply_markup=cancel_my_booking_kb(row["id"]))
@@ -78,6 +80,47 @@ async def book_start(callback: CallbackQuery, state: FSMContext, db: Database) -
     await state.set_state(ClientBookingState.waiting_city)
     await callback.message.answer("Выберите город", reply_markup=cities_kb(cities, "book"))
     await callback.answer()
+
+
+async def _prompt_contact(message: Message) -> None:
+    await message.answer(
+        "Введите Telegram-контакт (@username) или номер",
+        reply_markup=back_only_kb("hours"),
+    )
+
+
+async def _prompt_name(message: Message) -> None:
+    await message.answer("Имя (необязательно)", reply_markup=skip_or_back_kb("contact", "name"))
+
+
+async def _prompt_phone(message: Message) -> None:
+    await message.answer("Телефон (необязательно)", reply_markup=skip_or_back_kb("name", "phone"))
+
+
+async def _prompt_shoot_type(message: Message) -> None:
+    await message.answer(
+        "Тип съемки (необязательно)",
+        reply_markup=skip_or_back_kb("phone", "shoot_type"),
+    )
+
+
+async def _prompt_comment(message: Message) -> None:
+    await message.answer(
+        "Комментарий (необязательно)",
+        reply_markup=skip_or_back_kb("shoot_type", "comment"),
+    )
+
+
+async def _send_consent_step(message: Message, db: Database, data: dict) -> None:
+    selected_hours = [int(v) for v in data.get("selected_hours", [])]
+    pricing = await db.get_pricing()
+    total = len(selected_hours) * int(pricing["hourly_price"])
+    summary = (
+        f"Вы выбрали: {format_slots(selected_hours)}\n"
+        f"Итог: {total} {pricing['currency']}\n\n"
+        f"{POLICY_TEXT}"
+    )
+    await message.answer(summary, reply_markup=consent_kb())
 
 
 @router.callback_query(F.data.startswith("book:city:"))
@@ -152,14 +195,13 @@ async def book_day(callback: CallbackQuery, state: FSMContext, db: Database) -> 
 async def back_to_days(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     data = await state.get_data()
     city_id = int(data["city_id"])
+    current_day = _parse_iso_day(data["day"]) if data.get("day") else None
     rows = await db.available_dates(city_id)
-    grouped = defaultdict(list)
-    for row in rows:
-        day = row["work_date"]
-        grouped[(day.year, day.month)].append(day)
-    last_month = next(iter(grouped.values()), [])
+    days = [row["work_date"] for row in rows]
+    if current_day:
+        days = [d for d in days if d.year == current_day.year and d.month == current_day.month]
     await state.set_state(ClientBookingState.waiting_day)
-    await callback.message.answer("Выберите день", reply_markup=days_kb(last_month))
+    await callback.message.answer("Выберите день", reply_markup=days_kb(days))
     await callback.answer()
 
 
@@ -193,7 +235,7 @@ async def book_reset_hours(callback: CallbackQuery, state: FSMContext, db: Datab
 
 
 @router.callback_query(F.data == "book:hours:done")
-async def book_hours_done(callback: CallbackQuery, state: FSMContext) -> None:
+async def book_hours_done(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     data = await state.get_data()
     selected = [int(v) for v in data.get("selected_hours", [])]
     if not selected:
@@ -203,8 +245,13 @@ async def book_hours_done(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Можно выбрать только часы подряд", show_alert=True)
         return
 
+    pricing = await db.get_pricing()
+    total = len(selected) * int(pricing["hourly_price"])
     await state.set_state(ClientBookingState.waiting_contact)
-    await callback.message.answer("Введите Telegram-контакт (@username) или номер")
+    await callback.message.answer(
+        f"Выбрано часов: {len(selected)}\nПредварительный итог: {total} {pricing['currency']}"
+    )
+    await _prompt_contact(callback.message)
     await callback.answer()
 
 
@@ -212,39 +259,106 @@ async def book_hours_done(callback: CallbackQuery, state: FSMContext) -> None:
 async def book_contact(message: Message, state: FSMContext) -> None:
     await state.update_data(tg_contact=message.text.strip())
     await state.set_state(ClientBookingState.waiting_name)
-    await message.answer("Имя (или '-' чтобы пропустить)")
+    await _prompt_name(message)
 
 
 @router.message(ClientBookingState.waiting_name)
 async def book_name(message: Message, state: FSMContext) -> None:
-    value = message.text.strip()
-    await state.update_data(client_name=None if value == "-" else value)
+    await state.update_data(client_name=message.text.strip())
     await state.set_state(ClientBookingState.waiting_phone)
-    await message.answer("Телефон (или '-' чтобы пропустить)")
+    await _prompt_phone(message)
 
 
 @router.message(ClientBookingState.waiting_phone)
 async def book_phone(message: Message, state: FSMContext) -> None:
-    value = message.text.strip()
-    await state.update_data(phone=None if value == "-" else value)
+    await state.update_data(phone=message.text.strip())
     await state.set_state(ClientBookingState.waiting_shoot_type)
-    await message.answer("Тип съемки (или '-' чтобы пропустить)")
+    await _prompt_shoot_type(message)
 
 
 @router.message(ClientBookingState.waiting_shoot_type)
 async def book_shoot_type(message: Message, state: FSMContext) -> None:
-    value = message.text.strip()
-    await state.update_data(shoot_type=None if value == "-" else value)
+    await state.update_data(shoot_type=message.text.strip())
     await state.set_state(ClientBookingState.waiting_comment)
-    await message.answer("Комментарий (или '-' чтобы пропустить)")
+    await _prompt_comment(message)
 
 
 @router.message(ClientBookingState.waiting_comment)
-async def book_comment(message: Message, state: FSMContext) -> None:
-    value = message.text.strip()
-    await state.update_data(comment=None if value == "-" else value)
+async def book_comment(message: Message, state: FSMContext, db: Database) -> None:
+    await state.update_data(comment=message.text.strip())
     await state.set_state(ClientBookingState.waiting_consent)
-    await message.answer(POLICY_TEXT, reply_markup=consent_kb())
+    data = await state.get_data()
+    await _send_consent_step(message, db, data)
+
+
+@router.callback_query(F.data.startswith("book:skip:"))
+async def book_skip_optional(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    target = callback.data.split(":")[-1]
+    if target == "name":
+        await state.update_data(client_name=None)
+        await state.set_state(ClientBookingState.waiting_phone)
+        await _prompt_phone(callback.message)
+    elif target == "phone":
+        await state.update_data(phone=None)
+        await state.set_state(ClientBookingState.waiting_shoot_type)
+        await _prompt_shoot_type(callback.message)
+    elif target == "shoot_type":
+        await state.update_data(shoot_type=None)
+        await state.set_state(ClientBookingState.waiting_comment)
+        await _prompt_comment(callback.message)
+    elif target == "comment":
+        await state.update_data(comment=None)
+        await state.set_state(ClientBookingState.waiting_consent)
+        data = await state.get_data()
+        await _send_consent_step(callback.message, db, data)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:hours")
+async def back_to_hours_from_contact(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    data = await state.get_data()
+    city_id = int(data["city_id"])
+    day = _parse_iso_day(data["day"])
+    free_hours = await db.available_hours(city_id, day)
+    selected = [int(v) for v in data.get("selected_hours", [])]
+    await state.set_state(ClientBookingState.waiting_hours)
+    await callback.message.answer("Выберите один или несколько часов подряд", reply_markup=hours_kb(free_hours, selected))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:contact")
+async def back_to_contact(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ClientBookingState.waiting_contact)
+    await _prompt_contact(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:name")
+async def back_to_name(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ClientBookingState.waiting_name)
+    await _prompt_name(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:phone")
+async def back_to_phone(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ClientBookingState.waiting_phone)
+    await _prompt_phone(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:shoot_type")
+async def back_to_shoot_type(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ClientBookingState.waiting_shoot_type)
+    await _prompt_shoot_type(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:comment")
+async def back_to_comment(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(ClientBookingState.waiting_comment)
+    await _prompt_comment(callback.message)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "book:consent:no")
@@ -263,18 +377,23 @@ async def book_consent_yes(
 ) -> None:
     data = await state.get_data()
     try:
+        pricing = await db.get_pricing()
+        selected_hours = sorted([int(h) for h in data["selected_hours"]])
         draft = BookingDraft(
             user_tg_id=callback.from_user.id,
             username=callback.from_user.username,
             city_id=int(data["city_id"]),
             booking_date=_parse_iso_day(data["day"]),
-            hours=sorted([int(h) for h in data["selected_hours"]]),
+            hours=selected_hours,
             tg_contact=data["tg_contact"],
             client_name=data.get("client_name"),
             phone=data.get("phone"),
             shoot_type=data.get("shoot_type"),
             comment=data.get("comment"),
             policy_version=settings.policy_version,
+            hour_price=int(pricing["hourly_price"]),
+            total_price=len(selected_hours) * int(pricing["hourly_price"]),
+            currency=pricing["currency"],
         )
         booking_id = await db.create_booking(draft)
     except Exception as exc:
@@ -287,7 +406,8 @@ async def book_consent_yes(
         (
             f"Заявка #{booking_id} создана и отправлена на подтверждение.\n"
             f"{city['name']} {draft.booking_date.strftime('%d.%m.%Y')}\n"
-            f"Часы: {format_hours(draft.hours)}"
+            f"Часы: {format_slots(draft.hours)}\n"
+            f"Итог: {draft.total_price} {draft.currency}"
         ),
         reply_markup=main_menu_kb(),
     )
@@ -299,7 +419,8 @@ async def book_consent_yes(
                 f"Новая заявка #{booking_id}\n"
                 f"Город: {city['name']}\n"
                 f"Дата: {draft.booking_date.strftime('%d.%m.%Y')}\n"
-                f"Часы: {format_hours(draft.hours)}\n"
+                f"Часы: {format_slots(draft.hours)}\n"
+                f"Итог: {draft.total_price} {draft.currency}\n"
                 "Откройте /admin -> Заявки на подтверждение"
             ),
         )
@@ -328,7 +449,8 @@ async def book_cancel(callback: CallbackQuery, db: Database) -> None:
             (
                 f"Клиент отменил запись #{booking_id}\n"
                 f"{booking['city_name']} {booking['booking_date'].strftime('%d.%m.%Y')}\n"
-                f"Часы: {format_hours(booking['hours'])}"
+                f"Часы: {format_slots(booking['hours'])}\n"
+                f"Итог: {booking['total_price']} {booking['currency']}"
             ),
         )
     await callback.answer()

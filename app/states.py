@@ -18,6 +18,14 @@ class AdminBlockState(StatesGroup):
     waiting_reason = State()
 
 
+class AdminPriceState(StatesGroup):
+    waiting_hour_price = State()
+
+
+class AdminArchiveState(StatesGroup):
+    waiting_delete_confirmation = State()
+
+
 class ClientBookingState(StatesGroup):
     waiting_city = State()
     waiting_month = State()
