@@ -64,7 +64,24 @@ async def cmd_my(message: Message, db: Database) -> None:
 
 @router.callback_query(F.data == "book:my")
 async def cb_my(callback: CallbackQuery, db: Database) -> None:
-    await _show_my_bookings(callback.message, db)
+    rows = await db.user_bookings(callback.from_user.id)
+    if not rows:
+        await callback.message.answer("У вас пока нет записей.", reply_markup=main_menu_kb())
+        await callback.answer()
+        return
+
+    for row in rows:
+        txt = (
+            f"Запись #{row['id']}\n"
+            f"Статус: {row['status']}\n"
+            f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
+            f"Часы: {format_slots(row['hours'])}\n"
+            f"Итог: {row['total_price']} {row['currency']}"
+        )
+        if row["status"] in ("pending", "confirmed"):
+            await callback.message.answer(txt, reply_markup=cancel_my_booking_kb(row["id"]))
+        else:
+            await callback.message.answer(txt)
     await callback.answer()
 
 
@@ -402,6 +419,11 @@ async def book_consent_yes(
         return
 
     city = await db.get_city(draft.city_id)
+    client_link = (
+        f"@{callback.from_user.username}"
+        if callback.from_user.username
+        else f"<a href=\"tg://user?id={callback.from_user.id}\">Клиент</a>"
+    )
     await callback.message.answer(
         (
             f"Заявка #{booking_id} создана и отправлена на подтверждение.\n"
@@ -417,6 +439,7 @@ async def book_consent_yes(
             admin_id,
             (
                 f"Новая заявка #{booking_id}\n"
+                f"Клиент: {client_link}\n"
                 f"Город: {city['name']}\n"
                 f"Дата: {draft.booking_date.strftime('%d.%m.%Y')}\n"
                 f"Часы: {format_slots(draft.hours)}\n"
@@ -443,11 +466,17 @@ async def book_cancel(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.message.answer(f"Запись #{booking_id} отменена")
+    client_link = (
+        f"@{callback.from_user.username}"
+        if callback.from_user.username
+        else f"<a href=\"tg://user?id={callback.from_user.id}\">Клиент</a>"
+    )
     for admin_id in await db.active_admin_ids():
         await callback.bot.send_message(
             admin_id,
             (
                 f"Клиент отменил запись #{booking_id}\n"
+                f"Профиль: {client_link}\n"
                 f"{booking['city_name']} {booking['booking_date'].strftime('%d.%m.%Y')}\n"
                 f"Часы: {format_slots(booking['hours'])}\n"
                 f"Итог: {booking['total_price']} {booking['currency']}"

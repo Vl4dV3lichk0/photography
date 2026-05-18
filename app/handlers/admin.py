@@ -198,8 +198,14 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
         return
 
     for row in rows:
+        client_link = (
+            f"@{row['username']}"
+            if row["username"]
+            else f"<a href=\"tg://user?id={row['user_tg_id']}\">Клиент</a>"
+        )
         txt = (
             f"Заявка #{row['id']}\n"
+            f"Клиент: {client_link}\n"
             f"Город: {row['city_name']}\n"
             f"Дата: {row['booking_date'].strftime('%d.%m.%Y')}\n"
             f"Часы: {format_slots(row['hours'])}\n"
