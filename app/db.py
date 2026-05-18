@@ -355,7 +355,7 @@ class Database:
             JOIN cities c ON c.id = b.city_id
             JOIN booking_slots bs ON bs.booking_id = b.id
             WHERE b.user_tg_id = $1
-              AND b.status <> 'archived'
+              AND b.status IN ('pending', 'confirmed')
             GROUP BY b.id, c.name
             ORDER BY b.booking_date DESC
             LIMIT 20
