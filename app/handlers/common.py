@@ -13,7 +13,7 @@ router = Router()
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, db: Database) -> None:
-    rows = await db.schedule_preview(days=21)
+    rows = await db.schedule_preview(days=90, limit=15)
     await message.answer(format_schedule_preview(rows), reply_markup=main_menu_kb())
 
 

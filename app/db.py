@@ -1,4 +1,4 @@
-`from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
@@ -350,16 +350,50 @@ class Database:
             user_tg_id,
         )
 
-    async def schedule_preview(self, days: int = 14) -> List[asyncpg.Record]:
+    async def schedule_preview(self, days: int = 21, limit: int = 15) -> List[asyncpg.Record]:
         return await self.pool.fetch(
             """
-            SELECT c.name AS city_name, ww.work_date, ww.start_hour, ww.end_hour
-            FROM working_windows ww
-            JOIN cities c ON c.id = ww.city_id
-            WHERE ww.work_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $1::int
-            ORDER BY ww.work_date, c.name
+            WITH windows AS (
+                SELECT ww.city_id, ww.work_date, ww.start_hour, ww.end_hour
+                FROM working_windows ww
+                WHERE ww.work_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $1::int
+            ),
+            possible_hours AS (
+                SELECT w.city_id, w.work_date, gs.hour::int AS hour
+                FROM windows w
+                CROSS JOIN LATERAL generate_series(w.start_hour, w.end_hour - 1) AS gs(hour)
+            ),
+            blocked_hours AS (
+                SELECT tb.city_id, tb.block_date AS work_date, gs.hour::int AS hour
+                FROM time_blocks tb
+                JOIN windows w ON w.city_id = tb.city_id AND w.work_date = tb.block_date
+                CROSS JOIN LATERAL generate_series(tb.start_hour, tb.end_hour - 1) AS gs(hour)
+            ),
+            busy_hours AS (
+                SELECT bs.city_id, bs.slot_date AS work_date, bs.hour::int AS hour
+                FROM booking_slots bs
+                JOIN bookings b ON b.id = bs.booking_id
+                JOIN windows w ON w.city_id = bs.city_id AND w.work_date = bs.slot_date
+                WHERE b.status IN ('pending', 'confirmed')
+            )
+            SELECT c.name AS city_name,
+                   p.city_id,
+                   p.work_date,
+                   ARRAY_AGG(p.hour ORDER BY p.hour) AS free_hours
+            FROM possible_hours p
+            JOIN cities c ON c.id = p.city_id
+            LEFT JOIN blocked_hours bh
+              ON bh.city_id = p.city_id AND bh.work_date = p.work_date AND bh.hour = p.hour
+            LEFT JOIN busy_hours byh
+              ON byh.city_id = p.city_id AND byh.work_date = p.work_date AND byh.hour = p.hour
+            WHERE bh.hour IS NULL
+              AND byh.hour IS NULL
+            GROUP BY c.name, p.city_id, p.work_date
+            ORDER BY p.work_date, c.name
+            LIMIT $2
             """,
             days,
+            limit,
         )
 
     async def due_reminders(self, hours_before: int) -> List[asyncpg.Record]:
