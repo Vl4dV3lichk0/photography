@@ -19,22 +19,58 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Добавить город", callback_data="admin:add_city")
-    kb.button(text="Установить расписание", callback_data="admin:set_window")
-    kb.button(text="Добавить блокировку", callback_data="admin:add_block")
-    kb.button(text="Изменить цену за час", callback_data="admin:set_price")
-    kb.button(text="Заявки на подтверждение", callback_data="admin:pending")
-    kb.button(text="Активные заявки", callback_data="admin:active")
-    kb.button(text="Архивация сейчас", callback_data="admin:archive:run")
-    kb.button(text="Архивные записи", callback_data="admin:archive:list")
+    kb.button(text="Города", callback_data="admin:menu:cities")
+    kb.button(text="Расписание", callback_data="admin:menu:schedule")
+    kb.button(text="Записи", callback_data="admin:menu:bookings")
+    kb.button(text="Прайс", callback_data="admin:set_price")
+    kb.button(text="Архив", callback_data="admin:menu:archive")
     kb.adjust(1)
     return kb.as_markup()
 
 
-def cities_kb(cities: Iterable[dict], prefix: str) -> InlineKeyboardMarkup:
+def admin_cities_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Добавить город", callback_data="admin:add_city")
+    kb.button(text="Удалить город", callback_data="admin:city:delete:start")
+    kb.button(text="Назад", callback_data="admin:menu:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_schedule_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Добавить/изменить дату и часы", callback_data="admin:set_window")
+    kb.button(text="Убрать часы (блокировка)", callback_data="admin:add_block")
+    kb.button(text="Удалить дату расписания", callback_data="admin:window:delete:start")
+    kb.button(text="Назад", callback_data="admin:menu:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_bookings_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Заявки на подтверждение", callback_data="admin:pending")
+    kb.button(text="Активные заявки", callback_data="admin:active")
+    kb.button(text="Назад", callback_data="admin:menu:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_archive_menu_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Архивация сейчас", callback_data="admin:archive:run")
+    kb.button(text="Архивные записи", callback_data="admin:archive:list")
+    kb.button(text="Назад", callback_data="admin:menu:root")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def cities_kb(cities: Iterable[dict], prefix: str, back_callback: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for city in cities:
         kb.button(text=city["name"], callback_data=f"{prefix}:city:{city['id']}")
+    if back_callback:
+        kb.button(text="Назад", callback_data=back_callback)
     kb.adjust(1)
     return kb.as_markup()
 
@@ -163,6 +199,14 @@ def pending_action_kb(booking_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def admin_active_action_kb(booking_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Отменить запись", callback_data=f"admin:cancel:{booking_id}")]
+        ]
+    )
+
+
 def cancel_my_booking_kb(booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -191,3 +235,18 @@ def archive_delete_confirm_kb(booking_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Отмена", callback_data="admin:archive:list")],
         ]
     )
+
+
+def simple_back_kb(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Назад", callback_data=callback_data)]]
+    )
+
+
+def date_choice_kb(dates: List[date], prefix: str, back_callback: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for d in dates[:24]:
+        kb.button(text=d.strftime("%d.%m.%Y"), callback_data=f"{prefix}:{d.isoformat()}")
+    kb.button(text="Назад", callback_data=back_callback)
+    kb.adjust(2)
+    return kb.as_markup()

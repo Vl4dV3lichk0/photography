@@ -89,6 +89,32 @@ class Database:
             "SELECT id, name FROM cities WHERE id = $1 AND is_active = TRUE", city_id
         )
 
+    async def deactivate_city(self, city_id: int) -> bool:
+        result = await self.pool.execute(
+            "UPDATE cities SET is_active = FALSE WHERE id = $1 AND is_active = TRUE",
+            city_id,
+        )
+        return result.endswith("1")
+
+    async def city_work_dates(self, city_id: int) -> List[asyncpg.Record]:
+        return await self.pool.fetch(
+            """
+            SELECT work_date
+            FROM working_windows
+            WHERE city_id = $1 AND work_date >= CURRENT_DATE
+            ORDER BY work_date
+            """,
+            city_id,
+        )
+
+    async def delete_working_window(self, city_id: int, work_date: date) -> bool:
+        result = await self.pool.execute(
+            "DELETE FROM working_windows WHERE city_id = $1 AND work_date = $2",
+            city_id,
+            work_date,
+        )
+        return result.endswith("1")
+
     async def set_working_window(
         self, city_id: int, work_date: date, start_hour: int, end_hour: int, created_by: int
     ) -> tuple[bool, str]:

@@ -10,11 +10,18 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app.db import Database
 from app.keyboards import (
+    admin_archive_menu_kb,
+    admin_active_action_kb,
+    admin_bookings_menu_kb,
+    admin_cities_menu_kb,
     admin_menu_kb,
+    admin_schedule_menu_kb,
     archive_delete_confirm_kb,
     archived_item_kb,
     cities_kb,
+    date_choice_kb,
     pending_action_kb,
+    simple_back_kb,
 )
 from app.states import (
     AdminAddCityState,
@@ -54,6 +61,13 @@ async def _ensure_admin(callback: CallbackQuery, db: Database) -> bool:
     return ok
 
 
+async def _ensure_admin_message(message: Message, db: Database) -> bool:
+    if not await db.is_admin(message.from_user.id):
+        await message.answer("У вас нет доступа к админ-разделу.")
+        return False
+    return True
+
+
 def _client_link(username: str | None, user_tg_id: int) -> str:
     if username:
         return f"@{username}"
@@ -65,15 +79,86 @@ async def admin_add_city_start(callback: CallbackQuery, state: FSMContext, db: D
     if not await _ensure_admin(callback, db):
         return
     await state.set_state(AdminAddCityState.waiting_city_name)
-    await callback.message.answer("Введите название города")
+    await callback.message.answer("Введите название города", reply_markup=simple_back_kb("admin:menu:cities"))
     await callback.answer()
 
 
 @router.message(AdminAddCityState.waiting_city_name)
 async def admin_add_city_save(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     await db.add_city(message.text.strip())
     await state.clear()
-    await message.answer("Город сохранен", reply_markup=admin_menu_kb())
+    await message.answer("Город сохранен", reply_markup=admin_cities_menu_kb())
+
+
+@router.callback_query(F.data == "admin:menu:root")
+async def admin_menu_root(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await callback.message.answer("Главное меню администратора", reply_markup=admin_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:menu:cities")
+async def admin_menu_cities(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await callback.message.answer("Раздел: Города", reply_markup=admin_cities_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:menu:schedule")
+async def admin_menu_schedule(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await callback.message.answer("Раздел: Расписание", reply_markup=admin_schedule_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:menu:bookings")
+async def admin_menu_bookings(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await callback.message.answer("Раздел: Записи", reply_markup=admin_bookings_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:menu:archive")
+async def admin_menu_archive(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    await callback.message.answer("Раздел: Архив", reply_markup=admin_archive_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:city:delete:start")
+async def admin_delete_city_start(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    cities = await db.list_cities()
+    if not cities:
+        await callback.message.answer("Активных городов нет.", reply_markup=admin_cities_menu_kb())
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "Выберите город для удаления",
+        reply_markup=cities_kb(cities, "admincitydelete", "admin:menu:cities"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admincitydelete:city:"))
+async def admin_delete_city_confirm(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    city_id = int(callback.data.split(":")[-1])
+    ok = await db.deactivate_city(city_id)
+    await callback.message.answer(
+        "Город удален из активных." if ok else "Город уже неактивен.",
+        reply_markup=admin_cities_menu_kb(),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin:set_window")
@@ -86,7 +171,10 @@ async def admin_set_window_start(callback: CallbackQuery, state: FSMContext, db:
         await callback.answer()
         return
     await state.set_state(AdminWorkingWindowState.waiting_city)
-    await callback.message.answer("Выберите город", reply_markup=cities_kb(cities, "adminwindow"))
+    await callback.message.answer(
+        "Выберите город",
+        reply_markup=cities_kb(cities, "adminwindow", "admin:menu:schedule"),
+    )
     await callback.answer()
 
 
@@ -100,7 +188,9 @@ async def admin_set_window_city(callback: CallbackQuery, state: FSMContext) -> N
 
 
 @router.message(AdminWorkingWindowState.waiting_date)
-async def admin_set_window_date(message: Message, state: FSMContext) -> None:
+async def admin_set_window_date(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     try:
         day = _parse_date(message.text)
     except Exception:
@@ -113,6 +203,8 @@ async def admin_set_window_date(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminWorkingWindowState.waiting_hours)
 async def admin_set_window_hours(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     try:
         start, end = _parse_hours(message.text)
     except Exception:
@@ -128,7 +220,57 @@ async def admin_set_window_hours(message: Message, state: FSMContext, db: Databa
         created_by=message.from_user.id,
     )
     await state.clear()
-    await message.answer(info if ok else f"Ошибка: {info}", reply_markup=admin_menu_kb())
+    await message.answer(info if ok else f"Ошибка: {info}", reply_markup=admin_schedule_menu_kb())
+
+
+@router.callback_query(F.data == "admin:window:delete:start")
+async def admin_window_delete_start(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    cities = await db.list_cities()
+    if not cities:
+        await callback.message.answer("Нет активных городов.", reply_markup=admin_schedule_menu_kb())
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "Выберите город для удаления даты",
+        reply_markup=cities_kb(cities, "adminwindelcity", "admin:menu:schedule"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindelcity:city:"))
+async def admin_window_delete_city(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    city_id = int(callback.data.split(":")[-1])
+    city = await db.get_city(city_id)
+    dates = [row["work_date"] for row in await db.city_work_dates(city_id)]
+    if not dates:
+        await callback.message.answer("Для города нет дат расписания.", reply_markup=admin_schedule_menu_kb())
+        await callback.answer()
+        return
+    await callback.message.answer(
+        f"Выберите дату для удаления ({city['name']})",
+        reply_markup=date_choice_kb(dates, f"adminwindeldate:{city_id}", "admin:menu:schedule"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindeldate:"))
+async def admin_window_delete_date(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    payload = callback.data.split(":", 1)[1]
+    city_id_raw, iso_day = payload.split(":")
+    city_id = int(city_id_raw)
+    day = datetime.strptime(iso_day, "%Y-%m-%d").date()
+    ok = await db.delete_working_window(city_id, day)
+    await callback.message.answer(
+        "Дата расписания удалена." if ok else "Не удалось удалить дату.",
+        reply_markup=admin_schedule_menu_kb(),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin:add_block")
@@ -141,7 +283,10 @@ async def admin_add_block_start(callback: CallbackQuery, state: FSMContext, db: 
         await callback.answer()
         return
     await state.set_state(AdminBlockState.waiting_city)
-    await callback.message.answer("Город для блокировки", reply_markup=cities_kb(cities, "adminblock"))
+    await callback.message.answer(
+        "Город для блокировки",
+        reply_markup=cities_kb(cities, "adminblock", "admin:menu:schedule"),
+    )
     await callback.answer()
 
 
@@ -155,7 +300,9 @@ async def admin_add_block_city(callback: CallbackQuery, state: FSMContext) -> No
 
 
 @router.message(AdminBlockState.waiting_date)
-async def admin_add_block_date(message: Message, state: FSMContext) -> None:
+async def admin_add_block_date(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     try:
         day = _parse_date(message.text)
     except Exception:
@@ -167,7 +314,9 @@ async def admin_add_block_date(message: Message, state: FSMContext) -> None:
 
 
 @router.message(AdminBlockState.waiting_hours)
-async def admin_add_block_hours(message: Message, state: FSMContext) -> None:
+async def admin_add_block_hours(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     try:
         start, end = _parse_hours(message.text)
     except Exception:
@@ -180,6 +329,8 @@ async def admin_add_block_hours(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminBlockState.waiting_reason)
 async def admin_add_block_reason(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     data = await state.get_data()
     await db.add_time_block(
         city_id=int(data["city_id"]),
@@ -190,7 +341,7 @@ async def admin_add_block_reason(message: Message, state: FSMContext, db: Databa
         created_by=message.from_user.id,
     )
     await state.clear()
-    await message.answer("Блокировка сохранена", reply_markup=admin_menu_kb())
+    await message.answer("Блокировка сохранена", reply_markup=admin_schedule_menu_kb())
 
 
 @router.callback_query(F.data == "admin:pending")
@@ -219,6 +370,7 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
             f"Итог: {row['total_price']} {row['currency']}"
         )
         await callback.message.answer(txt, reply_markup=pending_action_kb(row["id"]))
+    await callback.message.answer("Действия с записями", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -244,8 +396,39 @@ async def admin_active_list(callback: CallbackQuery, db: Database) -> None:
             f"Контакт: {row['tg_contact']}\n"
             f"Итог: {row['total_price']} {row['currency']}"
         )
-        await callback.message.answer(txt)
+        if row["status"] in ("pending", "confirmed"):
+            await callback.message.answer(txt, reply_markup=admin_active_action_kb(row["id"]))
+        else:
+            await callback.message.answer(txt)
 
+    await callback.message.answer("Действия с записями", reply_markup=admin_bookings_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:cancel:"))
+async def admin_cancel_booking(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    booking_id = int(callback.data.split(":")[-1])
+    booking = await db.get_booking(booking_id)
+    if not booking:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+
+    ok = await db.cancel_booking(booking_id, callback.from_user.id)
+    if not ok:
+        await callback.answer("Запись уже неактивна", show_alert=True)
+        return
+
+    await callback.bot.send_message(
+        booking["user_tg_id"],
+        (
+            f"Запись #{booking_id} отменена администратором.\n"
+            f"{booking['city_name']} {booking['booking_date'].strftime('%d.%m.%Y')}\n"
+            f"Часы: {format_slots(booking['hours'])}"
+        ),
+    )
+    await callback.message.answer("Запись отменена.", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -302,13 +485,16 @@ async def admin_set_price_start(callback: CallbackQuery, state: FSMContext, db: 
         (
             f"Текущая цена: {pricing['hourly_price']} {pricing['currency']}\n"
             "Введите новую цену за 1 час (целое число, рубли)."
-        )
+        ),
+        reply_markup=simple_back_kb("admin:menu:root"),
     )
     await callback.answer()
 
 
 @router.message(AdminPriceState.waiting_hour_price)
 async def admin_set_price_save(message: Message, state: FSMContext, db: Database) -> None:
+    if not await _ensure_admin_message(message, db):
+        return
     try:
         price = _parse_price(message.text)
     except Exception:
@@ -334,7 +520,10 @@ async def admin_archive_run(callback: CallbackQuery, db: Database, settings) -> 
     if not await _ensure_admin(callback, db):
         return
     archived = await db.archive_expired_bookings(settings.timezone, callback.from_user.id)
-    await callback.message.answer(f"Архивация завершена. Перенесено: {archived}")
+    await callback.message.answer(
+        f"Архивация завершена. Перенесено: {archived}",
+        reply_markup=admin_archive_menu_kb(),
+    )
     await callback.answer()
 
 
@@ -360,6 +549,7 @@ async def admin_archive_list(callback: CallbackQuery, db: Database, state: FSMCo
             ),
             reply_markup=archived_item_kb(row["id"]),
         )
+    await callback.message.answer("Действия с архивом", reply_markup=admin_archive_menu_kb())
     await callback.answer()
 
 

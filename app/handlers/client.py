@@ -117,7 +117,17 @@ async def book_start(callback: CallbackQuery, state: FSMContext, db: Database) -
 
     await state.clear()
     await state.set_state(ClientBookingState.waiting_city)
-    await callback.message.answer("Выберите город", reply_markup=cities_kb(cities, "book"))
+    await callback.message.answer(
+        "Выберите город",
+        reply_markup=cities_kb(cities, "book", "book:back:main"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:back:main")
+async def book_back_main(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    await state.clear()
+    await callback.message.answer("Главное меню", reply_markup=main_menu_kb())
     await callback.answer()
 
 
@@ -181,7 +191,10 @@ async def book_city(callback: CallbackQuery, state: FSMContext, db: Database) ->
 async def back_to_cities(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     cities = await db.list_cities()
     await state.set_state(ClientBookingState.waiting_city)
-    await callback.message.answer("Выберите город", reply_markup=cities_kb(cities, "book"))
+    await callback.message.answer(
+        "Выберите город",
+        reply_markup=cities_kb(cities, "book", "book:back:main"),
+    )
     await callback.answer()
 
 
