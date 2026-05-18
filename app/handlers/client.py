@@ -10,7 +10,6 @@ from aiogram.types import CallbackQuery, Message
 from app.config import Settings
 from app.db import BookingDraft, Database
 from app.keyboards import (
-    back_only_kb,
     cancel_my_booking_kb,
     cities_kb,
     consent_kb,
@@ -131,15 +130,8 @@ async def book_back_main(callback: CallbackQuery, state: FSMContext, db: Databas
     await callback.answer()
 
 
-async def _prompt_contact(message: Message) -> None:
-    await message.answer(
-        "Введите Telegram-контакт (@username) или номер",
-        reply_markup=back_only_kb("hours"),
-    )
-
-
 async def _prompt_name(message: Message) -> None:
-    await message.answer("Имя (необязательно)", reply_markup=skip_or_back_kb("contact", "name"))
+    await message.answer("Имя (необязательно)", reply_markup=skip_or_back_kb("hours", "name"))
 
 
 async def _prompt_phone(message: Message) -> None:
@@ -170,6 +162,12 @@ async def _send_consent_step(message: Message, db: Database, data: dict) -> None
         f"{POLICY_TEXT}"
     )
     await message.answer(summary, reply_markup=consent_kb())
+
+
+def _auto_tg_contact(user_id: int, username: str | None) -> str:
+    if username:
+        return f"@{username}"
+    return f"tg://user?id={user_id}"
 
 
 @router.callback_query(F.data.startswith("book:city:"))
@@ -346,19 +344,12 @@ async def book_hours_done(callback: CallbackQuery, state: FSMContext, db: Databa
 
     pricing = await db.get_pricing()
     total = len(selected) * int(pricing["hourly_price"])
-    await state.set_state(ClientBookingState.waiting_contact)
+    await state.set_state(ClientBookingState.waiting_name)
     await callback.message.answer(
         f"Выбрано часов: {len(selected)}\nПредварительный итог: {total} {pricing['currency']}"
     )
-    await _prompt_contact(callback.message)
+    await _prompt_name(callback.message)
     await callback.answer()
-
-
-@router.message(ClientBookingState.waiting_contact)
-async def book_contact(message: Message, state: FSMContext) -> None:
-    await state.update_data(tg_contact=message.text.strip())
-    await state.set_state(ClientBookingState.waiting_name)
-    await _prompt_name(message)
 
 
 @router.message(ClientBookingState.waiting_name)
@@ -429,13 +420,6 @@ async def back_to_hours_from_contact(callback: CallbackQuery, state: FSMContext,
     await callback.answer()
 
 
-@router.callback_query(F.data == "book:back:contact")
-async def back_to_contact(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(ClientBookingState.waiting_contact)
-    await _prompt_contact(callback.message)
-    await callback.answer()
-
-
 @router.callback_query(F.data == "book:back:name")
 async def back_to_name(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ClientBookingState.waiting_name)
@@ -491,7 +475,7 @@ async def book_consent_yes(
             city_id=int(data["city_id"]),
             booking_date=_parse_iso_day(data["day"]),
             hours=selected_hours,
-            tg_contact=data["tg_contact"],
+            tg_contact=_auto_tg_contact(callback.from_user.id, callback.from_user.username),
             client_name=data.get("client_name"),
             phone=data.get("phone"),
             shoot_type=data.get("shoot_type"),

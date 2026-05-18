@@ -250,3 +250,12 @@ def date_choice_kb(dates: List[date], prefix: str, back_callback: str) -> Inline
     kb.button(text="Назад", callback_data=back_callback)
     kb.adjust(2)
     return kb.as_markup()
+
+
+def window_delete_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Подтвердить удаление даты", callback_data="admin:window:delete:force")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin:window:delete:abort")],
+        ]
+    )

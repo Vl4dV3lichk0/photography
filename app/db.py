@@ -115,6 +115,25 @@ class Database:
         )
         return result.endswith("1")
 
+    async def bookings_for_window(self, city_id: int, work_date: date) -> List[asyncpg.Record]:
+        return await self.pool.fetch(
+            """
+            SELECT b.id, b.user_tg_id, b.username, b.booking_date,
+                   b.total_price, b.currency, c.name AS city_name,
+                   ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+            FROM bookings b
+            JOIN cities c ON c.id = b.city_id
+            JOIN booking_slots bs ON bs.booking_id = b.id
+            WHERE b.city_id = $1
+              AND b.booking_date = $2
+              AND b.status IN ('pending', 'confirmed')
+            GROUP BY b.id, c.name
+            ORDER BY MIN(bs.hour)
+            """,
+            city_id,
+            work_date,
+        )
+
     async def set_working_window(
         self, city_id: int, work_date: date, start_hour: int, end_hour: int, created_by: int
     ) -> tuple[bool, str]:
