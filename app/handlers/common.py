@@ -13,6 +13,13 @@ router = Router()
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, db: Database) -> None:
+    if await db.is_admin(message.from_user.id):
+        await message.answer(
+            "Вы вошли как администратор. Управление заявками и расписанием доступно в панели.",
+            reply_markup=admin_menu_kb(),
+        )
+        return
+
     rows = await db.schedule_preview(days=90, limit=15)
     pricing = await db.get_pricing()
     await message.answer(
@@ -24,18 +31,20 @@ async def cmd_start(message: Message, db: Database) -> None:
 @router.message(Command("price"))
 async def cmd_price(message: Message, db: Database) -> None:
     pricing = await db.get_pricing()
+    is_admin = await db.is_admin(message.from_user.id)
     await message.answer(
         format_price_offer(pricing["hourly_price"], pricing["currency"]),
-        reply_markup=main_menu_kb(),
+        reply_markup=admin_menu_kb() if is_admin else main_menu_kb(),
     )
 
 
 @router.callback_query(F.data == "info:price")
 async def cb_price(callback: CallbackQuery, db: Database) -> None:
     pricing = await db.get_pricing()
+    is_admin = await db.is_admin(callback.from_user.id)
     await callback.message.answer(
         format_price_offer(pricing["hourly_price"], pricing["currency"]),
-        reply_markup=main_menu_kb(),
+        reply_markup=admin_menu_kb() if is_admin else main_menu_kb(),
     )
     await callback.answer()
 

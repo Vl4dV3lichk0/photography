@@ -24,6 +24,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     kb.button(text="Добавить блокировку", callback_data="admin:add_block")
     kb.button(text="Изменить цену за час", callback_data="admin:set_price")
     kb.button(text="Заявки на подтверждение", callback_data="admin:pending")
+    kb.button(text="Активные заявки", callback_data="admin:active")
     kb.button(text="Архивация сейчас", callback_data="admin:archive:run")
     kb.button(text="Архивные записи", callback_data="admin:archive:list")
     kb.adjust(1)
@@ -68,29 +69,61 @@ def months_kb(dates: List[date]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def days_kb(days: List[date]) -> InlineKeyboardMarkup:
+def days_kb(days: List[date], page: int = 0, per_page: int = 8) -> InlineKeyboardMarkup:
     weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    start = page * per_page
+    end = start + per_page
+    visible_days = days[start:end]
+
     kb = InlineKeyboardBuilder()
-    for day in days:
+    for day in visible_days:
         kb.button(
             text=f"{weekdays[day.weekday()]} {day.strftime('%d.%m.%Y')}",
             callback_data=f"book:day:{day.isoformat()}",
         )
+
+    total_pages = max(1, (len(days) + per_page - 1) // per_page)
+    if total_pages > 1:
+        if page > 0:
+            kb.button(text="<", callback_data=f"book:days:page:{page - 1}")
+        kb.button(text=f"{page + 1}/{total_pages}", callback_data="book:days:noop")
+        if page + 1 < total_pages:
+            kb.button(text=">", callback_data=f"book:days:page:{page + 1}")
+
     kb.button(text="Назад", callback_data="book:back:months")
-    kb.adjust(2)
+    if total_pages > 1:
+        kb.adjust(2, 2, 2, 3, 1)
+    else:
+        kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
-def hours_kb(hours: List[int], selected: List[int]) -> InlineKeyboardMarkup:
+def hours_kb(hours: List[int], selected: List[int], page: int = 0, per_page: int = 12) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     selected_set = set(selected)
-    for hour in hours:
+    start = page * per_page
+    end = start + per_page
+    visible_hours = hours[start:end]
+
+    for hour in visible_hours:
         mark = "[x]" if hour in selected_set else "[ ]"
         kb.button(text=f"{mark} {hour:02d}:00 - {hour + 1:02d}:00", callback_data=f"book:hour:{hour}")
+
+    total_pages = max(1, (len(hours) + per_page - 1) // per_page)
+    if total_pages > 1:
+        if page > 0:
+            kb.button(text="<", callback_data=f"book:hours:page:{page - 1}")
+        kb.button(text=f"{page + 1}/{total_pages}", callback_data="book:hours:noop")
+        if page + 1 < total_pages:
+            kb.button(text=">", callback_data=f"book:hours:page:{page + 1}")
+
     kb.button(text="Подтвердить часы", callback_data="book:hours:done")
     kb.button(text="Сбросить", callback_data="book:hours:reset")
     kb.button(text="Назад", callback_data="book:back:days")
-    kb.adjust(3, 1, 2)
+    if total_pages > 1:
+        kb.adjust(3, 3, 3, 3, 3, 1, 2)
+    else:
+        kb.adjust(3, 3, 3, 3, 1, 2)
     return kb.as_markup()
 
 

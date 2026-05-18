@@ -282,6 +282,23 @@ class Database:
             """
         )
 
+    async def active_bookings(self) -> List[asyncpg.Record]:
+        return await self.pool.fetch(
+            """
+            SELECT b.id, b.user_tg_id, b.username, b.booking_date, b.status,
+                   b.client_name, b.phone, b.shoot_type, b.comment,
+                   b.tg_contact, b.total_price, b.currency,
+                   c.name AS city_name,
+                   ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+            FROM bookings b
+            JOIN cities c ON c.id = b.city_id
+            JOIN booking_slots bs ON bs.booking_id = b.id
+            WHERE b.status IN ('pending', 'confirmed')
+            GROUP BY b.id, c.name
+            ORDER BY b.booking_date, MIN(bs.hour)
+            """
+        )
+
     async def update_booking_status(self, booking_id: int, status: str, admin_tg_id: int) -> bool:
         row = await self.pool.fetchrow(
             """

@@ -37,6 +37,20 @@ def _is_consecutive(hours: list[int]) -> bool:
     return all((ordered[i + 1] - ordered[i]) == 1 for i in range(len(ordered) - 1))
 
 
+async def _ensure_client_callback(callback: CallbackQuery, db: Database) -> bool:
+    if await db.is_admin(callback.from_user.id):
+        await callback.answer("Режим записи доступен только клиентам.", show_alert=True)
+        return False
+    return True
+
+
+async def _ensure_client_message(message: Message, db: Database) -> bool:
+    if await db.is_admin(message.from_user.id):
+        await message.answer("Вы администратор. Управление доступно через /admin.")
+        return False
+    return True
+
+
 async def _show_my_bookings(message: Message, db: Database) -> None:
     rows = await db.user_bookings(message.from_user.id)
     if not rows:
@@ -59,11 +73,16 @@ async def _show_my_bookings(message: Message, db: Database) -> None:
 
 @router.message(Command("my"))
 async def cmd_my(message: Message, db: Database) -> None:
+    if not await _ensure_client_message(message, db):
+        return
     await _show_my_bookings(message, db)
 
 
 @router.callback_query(F.data == "book:my")
 async def cb_my(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_client_callback(callback, db):
+        return
+
     rows = await db.user_bookings(callback.from_user.id)
     if not rows:
         await callback.message.answer("У вас пока нет записей.", reply_markup=main_menu_kb())
@@ -87,6 +106,9 @@ async def cb_my(callback: CallbackQuery, db: Database) -> None:
 
 @router.callback_query(F.data == "book:start")
 async def book_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    if not await _ensure_client_callback(callback, db):
+        return
+
     cities = await db.list_cities()
     if not cities:
         await callback.message.answer("Пока нет активных городов. Попробуйте позже.")
@@ -149,7 +171,7 @@ async def book_city(callback: CallbackQuery, state: FSMContext, db: Database) ->
         await callback.answer()
         return
 
-    await state.update_data(city_id=city_id)
+    await state.update_data(city_id=city_id, selected_month="", day_page=0, hour_page=0)
     await state.set_state(ClientBookingState.waiting_month)
     await callback.message.answer("Выберите месяц", reply_markup=months_kb(dates))
     await callback.answer()
@@ -177,8 +199,31 @@ async def book_month(callback: CallbackQuery, state: FSMContext, db: Database) -
         await callback.answer("В этом месяце свободных дней нет", show_alert=True)
         return
 
+    await state.update_data(selected_month=ym, day_page=0)
     await state.set_state(ClientBookingState.waiting_day)
-    await callback.message.answer("Выберите день", reply_markup=days_kb(days))
+    await callback.message.answer("Выберите день", reply_markup=days_kb(days, page=0))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("book:days:page:"))
+async def book_days_page(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    page = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    city_id = int(data["city_id"])
+    ym = data.get("selected_month", "")
+    if not ym:
+        await callback.answer("Сначала выберите месяц", show_alert=True)
+        return
+    year, month = [int(x) for x in ym.split("-")]
+    rows = await db.available_dates(city_id)
+    days = [r["work_date"] for r in rows if r["work_date"].year == year and r["work_date"].month == month]
+    await state.update_data(day_page=page)
+    await callback.message.edit_reply_markup(reply_markup=days_kb(days, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:days:noop")
+async def book_days_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
@@ -202,9 +247,30 @@ async def book_day(callback: CallbackQuery, state: FSMContext, db: Database) -> 
         await callback.answer("На этот день свободных часов нет", show_alert=True)
         return
 
-    await state.update_data(day=day.isoformat(), selected_hours=[])
+    await state.update_data(day=day.isoformat(), selected_hours=[], hour_page=0)
     await state.set_state(ClientBookingState.waiting_hours)
-    await callback.message.answer("Выберите один или несколько часов подряд", reply_markup=hours_kb(free_hours, []))
+    await callback.message.answer(
+        "Выберите один или несколько часов подряд",
+        reply_markup=hours_kb(free_hours, [], page=0),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("book:hours:page:"))
+async def book_hours_page(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    page = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    city_id = int(data["city_id"])
+    day = _parse_iso_day(data["day"])
+    free_hours = await db.available_hours(city_id, day)
+    selected = [int(v) for v in data.get("selected_hours", [])]
+    await state.update_data(hour_page=page)
+    await callback.message.edit_reply_markup(reply_markup=hours_kb(free_hours, selected, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:hours:noop")
+async def book_hours_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
@@ -213,12 +279,13 @@ async def back_to_days(callback: CallbackQuery, state: FSMContext, db: Database)
     data = await state.get_data()
     city_id = int(data["city_id"])
     current_day = _parse_iso_day(data["day"]) if data.get("day") else None
+    current_page = int(data.get("day_page", 0))
     rows = await db.available_dates(city_id)
     days = [row["work_date"] for row in rows]
     if current_day:
         days = [d for d in days if d.year == current_day.year and d.month == current_day.month]
     await state.set_state(ClientBookingState.waiting_day)
-    await callback.message.answer("Выберите день", reply_markup=days_kb(days))
+    await callback.message.answer("Выберите день", reply_markup=days_kb(days, page=current_page))
     await callback.answer()
 
 
@@ -235,8 +302,9 @@ async def book_toggle_hour(callback: CallbackQuery, state: FSMContext, db: Datab
     city_id = int(data["city_id"])
     day = _parse_iso_day(data["day"])
     free_hours = await db.available_hours(city_id, day)
+    page = int(data.get("hour_page", 0))
     await state.update_data(selected_hours=selected)
-    await callback.message.edit_reply_markup(reply_markup=hours_kb(free_hours, selected))
+    await callback.message.edit_reply_markup(reply_markup=hours_kb(free_hours, selected, page=page))
     await callback.answer()
 
 
@@ -246,8 +314,9 @@ async def book_reset_hours(callback: CallbackQuery, state: FSMContext, db: Datab
     city_id = int(data["city_id"])
     day = _parse_iso_day(data["day"])
     free_hours = await db.available_hours(city_id, day)
+    page = int(data.get("hour_page", 0))
     await state.update_data(selected_hours=[])
-    await callback.message.edit_reply_markup(reply_markup=hours_kb(free_hours, []))
+    await callback.message.edit_reply_markup(reply_markup=hours_kb(free_hours, [], page=page))
     await callback.answer("Выбор часов очищен")
 
 
@@ -338,8 +407,12 @@ async def back_to_hours_from_contact(callback: CallbackQuery, state: FSMContext,
     day = _parse_iso_day(data["day"])
     free_hours = await db.available_hours(city_id, day)
     selected = [int(v) for v in data.get("selected_hours", [])]
+    page = int(data.get("hour_page", 0))
     await state.set_state(ClientBookingState.waiting_hours)
-    await callback.message.answer("Выберите один или несколько часов подряд", reply_markup=hours_kb(free_hours, selected))
+    await callback.message.answer(
+        "Выберите один или несколько часов подряд",
+        reply_markup=hours_kb(free_hours, selected, page=page),
+    )
     await callback.answer()
 
 
@@ -392,6 +465,9 @@ async def book_consent_yes(
     db: Database,
     settings: Settings,
 ) -> None:
+    if not await _ensure_client_callback(callback, db):
+        return
+
     data = await state.get_data()
     try:
         pricing = await db.get_pricing()
@@ -454,6 +530,9 @@ async def book_consent_yes(
 
 @router.callback_query(F.data.startswith("book:cancel:"))
 async def book_cancel(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_client_callback(callback, db):
+        return
+
     booking_id = int(callback.data.split(":")[-1])
     booking = await db.get_booking(booking_id)
     if not booking or booking["user_tg_id"] != callback.from_user.id:

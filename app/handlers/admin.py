@@ -54,6 +54,12 @@ async def _ensure_admin(callback: CallbackQuery, db: Database) -> bool:
     return ok
 
 
+def _client_link(username: str | None, user_tg_id: int) -> str:
+    if username:
+        return f"@{username}"
+    return f"<a href=\"tg://user?id={user_tg_id}\">Клиент</a>"
+
+
 @router.callback_query(F.data == "admin:add_city")
 async def admin_add_city_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     if not await _ensure_admin(callback, db):
@@ -198,11 +204,7 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
         return
 
     for row in rows:
-        client_link = (
-            f"@{row['username']}"
-            if row["username"]
-            else f"<a href=\"tg://user?id={row['user_tg_id']}\">Клиент</a>"
-        )
+        client_link = _client_link(row["username"], row["user_tg_id"])
         txt = (
             f"Заявка #{row['id']}\n"
             f"Клиент: {client_link}\n"
@@ -217,6 +219,33 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
             f"Итог: {row['total_price']} {row['currency']}"
         )
         await callback.message.answer(txt, reply_markup=pending_action_kb(row["id"]))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:active")
+async def admin_active_list(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+
+    rows = await db.active_bookings()
+    if not rows:
+        await callback.message.answer("Сейчас нет активных заявок.")
+        await callback.answer()
+        return
+
+    for row in rows:
+        client_link = _client_link(row["username"], row["user_tg_id"])
+        txt = (
+            f"Заявка #{row['id']} [{row['status']}]\n"
+            f"Клиент: {client_link}\n"
+            f"Город: {row['city_name']}\n"
+            f"Дата: {row['booking_date'].strftime('%d.%m.%Y')}\n"
+            f"Часы: {format_slots(row['hours'])}\n"
+            f"Контакт: {row['tg_contact']}\n"
+            f"Итог: {row['total_price']} {row['currency']}"
+        )
+        await callback.message.answer(txt)
+
     await callback.answer()
 
 
