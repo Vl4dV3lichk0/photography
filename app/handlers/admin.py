@@ -36,7 +36,7 @@ from app.states import (
     AdminWindowDeleteState,
     AdminWorkingWindowState,
 )
-from app.texts import format_price_offer, format_slots
+from app.texts import format_hour_ranges, format_price_offer, format_slots
 
 router = Router()
 
@@ -114,11 +114,47 @@ async def admin_menu_cities(callback: CallbackQuery, db: Database) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "admin:cities:list")
+async def admin_cities_list(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    cities = await db.list_cities()
+    if not cities:
+        await callback.message.answer("Список городов пуст.", reply_markup=admin_cities_menu_kb())
+        await callback.answer()
+        return
+
+    lines = ["Активные города:"]
+    for city in cities:
+        lines.append(f"- {city['name']}")
+    await callback.message.answer("\n".join(lines), reply_markup=admin_cities_menu_kb())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin:menu:schedule")
 async def admin_menu_schedule(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
     await callback.message.answer("Раздел: Расписание", reply_markup=admin_schedule_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:schedule:available")
+async def admin_schedule_available(callback: CallbackQuery, db: Database) -> None:
+    if not await _ensure_admin(callback, db):
+        return
+    rows = await db.schedule_preview(days=120, limit=50)
+    if not rows:
+        await callback.message.answer("Свободных окон для записи пока нет.", reply_markup=admin_schedule_menu_kb())
+        await callback.answer()
+        return
+
+    chunks = ["Доступное расписание для записи:"]
+    for row in rows:
+        chunks.append(
+            f"- {row['city_name']}: {row['work_date'].strftime('%d.%m.%Y')} {format_hour_ranges(row['free_hours'])}"
+        )
+    await callback.message.answer("\n".join(chunks), reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 

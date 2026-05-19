@@ -33,8 +33,9 @@ def admin_cities_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="Добавить", callback_data="admin:add_city")
     kb.button(text="Удалить", callback_data="admin:city:delete:start")
+    kb.button(text="Список городов", callback_data="admin:cities:list")
     kb.button(text="Назад", callback_data="admin:menu:root")
-    kb.adjust(2, 1)
+    kb.adjust(2, 1, 1)
     return kb.as_markup()
 
 
@@ -43,6 +44,7 @@ def admin_schedule_menu_kb() -> InlineKeyboardMarkup:
     kb.button(text="Добавить дату и часы", callback_data="admin:set_window")
     kb.button(text="Убрать часы", callback_data="admin:add_block")
     kb.button(text="Удалить дату", callback_data="admin:window:delete:start")
+    kb.button(text="Доступное расписание", callback_data="admin:schedule:available")
     kb.button(text="Назад", callback_data="admin:menu:root")
     kb.adjust(1)
     return kb.as_markup()
