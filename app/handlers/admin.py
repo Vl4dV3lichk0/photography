@@ -155,9 +155,24 @@ async def admin_delete_city_confirm(callback: CallbackQuery, db: Database) -> No
     if not await _ensure_admin(callback, db):
         return
     city_id = int(callback.data.split(":")[-1])
-    ok = await db.deactivate_city(city_id)
+    result = await db.delete_city_cascade(city_id)
+    if result["removed"] and result["affected"]:
+        for row in result["affected"]:
+            await callback.bot.send_message(
+                row["user_tg_id"],
+                (
+                    f"Ваша запись #{row['id']} отменена администратором.\n"
+                    "Причина: город удален из расписания.\n"
+                    f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
+                    f"Часы: {format_slots(row['hours'])}"
+                ),
+            )
     await callback.message.answer(
-        "Город удален из активных." if ok else "Город уже неактивен.",
+        (
+            f"Город удален. Отменено заявок: {len(result['affected'])}"
+            if result["removed"]
+            else "Город не найден."
+        ),
         reply_markup=admin_cities_menu_kb(),
     )
     await callback.answer()
@@ -268,13 +283,13 @@ async def admin_window_delete_date(callback: CallbackQuery, state: FSMContext, d
     city_id = int(city_id_raw)
     day = datetime.strptime(iso_day, "%Y-%m-%d").date()
 
-    active_rows = await db.bookings_for_window(city_id, day)
-    if active_rows:
+    result = await db.delete_working_window_cascade(city_id, day, force=False)
+    if result["requires_confirmation"]:
         await state.set_state(AdminWindowDeleteState.waiting_active_confirm)
         await state.update_data(city_id=city_id, work_date=day.isoformat())
         await callback.message.answer(
             (
-                f"На дату {day.strftime('%d.%m.%Y')} есть активные заявки: {len(active_rows)}.\n"
+                f"На дату {day.strftime('%d.%m.%Y')} есть активные заявки: {len(result['affected'])}.\n"
                 "Если подтвердить удаление, все эти записи будут отменены и клиенты получат уведомления."
             ),
             reply_markup=window_delete_confirm_kb(),
@@ -282,9 +297,8 @@ async def admin_window_delete_date(callback: CallbackQuery, state: FSMContext, d
         await callback.answer()
         return
 
-    ok = await db.delete_working_window(city_id, day)
     await callback.message.answer(
-        "Дата расписания удалена." if ok else "Не удалось удалить дату.",
+        "Дата расписания удалена." if result["removed"] else "Не удалось удалить дату.",
         reply_markup=admin_schedule_menu_kb(),
     )
     await callback.answer()
@@ -309,13 +323,8 @@ async def admin_window_delete_force(callback: CallbackQuery, state: FSMContext, 
         return
 
     day = datetime.strptime(raw_day, "%Y-%m-%d").date()
-    active_rows = await db.bookings_for_window(city_id, day)
-    canceled_count = 0
-    for row in active_rows:
-        ok = await db.cancel_booking(int(row["id"]), callback.from_user.id)
-        if not ok:
-            continue
-        canceled_count += 1
+    result = await db.delete_working_window_cascade(city_id, day, force=True)
+    for row in result["affected"]:
         await callback.bot.send_message(
             row["user_tg_id"],
             (
@@ -325,12 +334,10 @@ async def admin_window_delete_force(callback: CallbackQuery, state: FSMContext, 
                 f"Часы: {format_slots(row['hours'])}"
             ),
         )
-
-    removed = await db.delete_working_window(city_id, day)
     await state.clear()
-    if removed:
+    if result["removed"]:
         await callback.message.answer(
-            f"Дата удалена. Отменено заявок: {canceled_count}",
+            f"Дата удалена. Отменено заявок: {len(result['affected'])}",
             reply_markup=admin_schedule_menu_kb(),
         )
     else:
@@ -397,7 +404,7 @@ async def admin_add_block_reason(message: Message, state: FSMContext, db: Databa
     if not await _ensure_admin_message(message, db):
         return
     data = await state.get_data()
-    await db.add_time_block(
+    affected = await db.add_time_block(
         city_id=int(data["city_id"]),
         block_date=_parse_date(data["block_date"]),
         start_hour=int(data["start_hour"]),
@@ -405,8 +412,21 @@ async def admin_add_block_reason(message: Message, state: FSMContext, db: Databa
         reason=message.text.strip(),
         created_by=message.from_user.id,
     )
+    for row in affected:
+        await message.bot.send_message(
+            row["user_tg_id"],
+            (
+                f"Ваша запись #{row['id']} отменена администратором.\n"
+                "Причина: часы были убраны из расписания.\n"
+                f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
+                f"Часы: {format_slots(row['hours'])}"
+            ),
+        )
     await state.clear()
-    await message.answer("Блокировка сохранена", reply_markup=admin_schedule_menu_kb())
+    await message.answer(
+        f"Блокировка сохранена. Отменено заявок: {len(affected)}",
+        reply_markup=admin_schedule_menu_kb(),
+    )
 
 
 @router.callback_query(F.data == "admin:pending")

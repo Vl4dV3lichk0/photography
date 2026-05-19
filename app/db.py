@@ -46,6 +46,35 @@ class Database:
         sql = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         async with self.pool.acquire() as conn:
             await conn.execute(sql)
+            # Keep slot uniqueness stable: non-active bookings must not hold hours.
+            await conn.execute(
+                """
+                DELETE FROM booking_slots
+                WHERE booking_id IN (
+                    SELECT id FROM bookings WHERE status IN ('canceled', 'rejected', 'archived')
+                )
+                """
+            )
+
+    async def _delete_bookings_with_relations(self, conn: asyncpg.Connection, booking_ids: List[int]) -> None:
+        if not booking_ids:
+            return
+        await conn.execute(
+            "DELETE FROM booking_archive_snapshots WHERE booking_id = ANY($1::bigint[])",
+            booking_ids,
+        )
+        await conn.execute(
+            "DELETE FROM booking_events_audit WHERE booking_id = ANY($1::bigint[])",
+            booking_ids,
+        )
+        await conn.execute(
+            "DELETE FROM booking_slots WHERE booking_id = ANY($1::bigint[])",
+            booking_ids,
+        )
+        await conn.execute(
+            "DELETE FROM bookings WHERE id = ANY($1::bigint[])",
+            booking_ids,
+        )
 
     async def seed_admins(self, admin_ids: Sequence[int], owner_tg_id: int) -> None:
         if not self.pool:
@@ -96,6 +125,44 @@ class Database:
         )
         return result.endswith("1")
 
+    async def delete_city_cascade(self, city_id: int) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                city = await conn.fetchrow("SELECT id, name FROM cities WHERE id = $1", city_id)
+                if not city:
+                    return {"removed": False, "affected": [], "city_name": ""}
+
+                affected = await conn.fetch(
+                    """
+                    SELECT b.id, b.user_tg_id, b.booking_date, c.name AS city_name,
+                           ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+                    FROM bookings b
+                    JOIN cities c ON c.id = b.city_id
+                    JOIN booking_slots bs ON bs.booking_id = b.id
+                    WHERE b.city_id = $1
+                      AND b.status IN ('pending', 'confirmed')
+                    GROUP BY b.id, c.name
+                    """,
+                    city_id,
+                )
+
+                all_booking_ids = await conn.fetch(
+                    "SELECT id FROM bookings WHERE city_id = $1",
+                    city_id,
+                )
+                booking_ids = [int(row["id"]) for row in all_booking_ids]
+                await self._delete_bookings_with_relations(conn, booking_ids)
+
+                await conn.execute("DELETE FROM time_blocks WHERE city_id = $1", city_id)
+                await conn.execute("DELETE FROM working_windows WHERE city_id = $1", city_id)
+                removed = await conn.execute("DELETE FROM cities WHERE id = $1", city_id)
+
+        return {
+            "removed": removed.endswith("1"),
+            "affected": affected,
+            "city_name": city["name"],
+        }
+
     async def city_work_dates(self, city_id: int) -> List[asyncpg.Record]:
         return await self.pool.fetch(
             """
@@ -114,6 +181,54 @@ class Database:
             work_date,
         )
         return result.endswith("1")
+
+    async def delete_working_window_cascade(self, city_id: int, work_date: date, force: bool = False) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                affected = await conn.fetch(
+                    """
+                    SELECT b.id, b.user_tg_id, b.booking_date, c.name AS city_name,
+                           ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+                    FROM bookings b
+                    JOIN cities c ON c.id = b.city_id
+                    JOIN booking_slots bs ON bs.booking_id = b.id
+                    WHERE b.city_id = $1
+                      AND b.booking_date = $2
+                      AND b.status IN ('pending', 'confirmed')
+                    GROUP BY b.id, c.name
+                    ORDER BY MIN(bs.hour)
+                    """,
+                    city_id,
+                    work_date,
+                )
+
+                if affected and not force:
+                    return {"requires_confirmation": True, "affected": affected, "removed": False}
+
+                all_booking_ids = await conn.fetch(
+                    "SELECT id FROM bookings WHERE city_id = $1 AND booking_date = $2",
+                    city_id,
+                    work_date,
+                )
+                booking_ids = [int(row["id"]) for row in all_booking_ids]
+                await self._delete_bookings_with_relations(conn, booking_ids)
+
+                await conn.execute(
+                    "DELETE FROM time_blocks WHERE city_id = $1 AND block_date = $2",
+                    city_id,
+                    work_date,
+                )
+                removed = await conn.execute(
+                    "DELETE FROM working_windows WHERE city_id = $1 AND work_date = $2",
+                    city_id,
+                    work_date,
+                )
+
+        return {
+            "requires_confirmation": False,
+            "affected": affected,
+            "removed": removed.endswith("1"),
+        }
 
     async def bookings_for_window(self, city_id: int, work_date: date) -> List[asyncpg.Record]:
         return await self.pool.fetch(
@@ -178,19 +293,46 @@ class Database:
         end_hour: int,
         reason: str,
         created_by: int,
-    ) -> None:
-        await self.pool.execute(
-            """
-            INSERT INTO time_blocks (city_id, block_date, start_hour, end_hour, reason, created_by)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            """,
-            city_id,
-            block_date,
-            start_hour,
-            end_hour,
-            reason,
-            created_by,
-        )
+    ) -> List[asyncpg.Record]:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO time_blocks (city_id, block_date, start_hour, end_hour, reason, created_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    city_id,
+                    block_date,
+                    start_hour,
+                    end_hour,
+                    reason,
+                    created_by,
+                )
+
+                affected = await conn.fetch(
+                    """
+                    SELECT b.id, b.user_tg_id, b.booking_date, c.name AS city_name,
+                           ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+                    FROM bookings b
+                    JOIN cities c ON c.id = b.city_id
+                    JOIN booking_slots bs ON bs.booking_id = b.id
+                    WHERE b.city_id = $1
+                      AND b.booking_date = $2
+                      AND b.status IN ('pending', 'confirmed')
+                      AND bs.hour >= $3
+                      AND bs.hour < $4
+                    GROUP BY b.id, c.name
+                    """,
+                    city_id,
+                    block_date,
+                    start_hour,
+                    end_hour,
+                )
+                if affected:
+                    booking_ids = [int(row["id"]) for row in affected]
+                    await self._delete_bookings_with_relations(conn, booking_ids)
+
+                return affected
 
     async def available_dates(self, city_id: int) -> List[asyncpg.Record]:
         return await self.pool.fetch(
@@ -368,6 +510,8 @@ class Database:
             f"booking_{status}",
             admin_tg_id,
         )
+        if status in ("rejected", "canceled", "archived"):
+            await self.pool.execute("DELETE FROM booking_slots WHERE booking_id = $1", booking_id)
         return True
 
     async def get_booking(self, booking_id: int) -> Optional[asyncpg.Record]:
@@ -405,6 +549,7 @@ class Database:
             booking_id,
             actor_tg_id,
         )
+        await self.pool.execute("DELETE FROM booking_slots WHERE booking_id = $1", booking_id)
         return True
 
     async def user_bookings(self, user_tg_id: int) -> List[asyncpg.Record]:
