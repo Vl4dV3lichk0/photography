@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import calendar
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from typing import Iterable, List
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,26 +23,26 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     kb.button(text="Города", callback_data="admin:menu:cities")
     kb.button(text="Расписание", callback_data="admin:menu:schedule")
     kb.button(text="Записи", callback_data="admin:menu:bookings")
-    kb.button(text="Прайс", callback_data="admin:set_price")
     kb.button(text="Архив", callback_data="admin:menu:archive")
-    kb.adjust(1)
+    kb.button(text="Прайс", callback_data="admin:set_price")
+    kb.adjust(2, 2, 1)
     return kb.as_markup()
 
 
 def admin_cities_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Добавить город", callback_data="admin:add_city")
-    kb.button(text="Удалить город", callback_data="admin:city:delete:start")
+    kb.button(text="Добавить", callback_data="admin:add_city")
+    kb.button(text="Удалить", callback_data="admin:city:delete:start")
     kb.button(text="Назад", callback_data="admin:menu:root")
-    kb.adjust(1)
+    kb.adjust(2, 1)
     return kb.as_markup()
 
 
 def admin_schedule_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Добавить/изменить дату и часы", callback_data="admin:set_window")
-    kb.button(text="Убрать часы (блокировка)", callback_data="admin:add_block")
-    kb.button(text="Удалить дату расписания", callback_data="admin:window:delete:start")
+    kb.button(text="Добавить дату и часы", callback_data="admin:set_window")
+    kb.button(text="Убрать часы", callback_data="admin:add_block")
+    kb.button(text="Удалить дату", callback_data="admin:window:delete:start")
     kb.button(text="Назад", callback_data="admin:menu:root")
     kb.adjust(1)
     return kb.as_markup()
@@ -49,19 +50,91 @@ def admin_schedule_menu_kb() -> InlineKeyboardMarkup:
 
 def admin_bookings_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Заявки на подтверждение", callback_data="admin:pending")
+    kb.button(text="На подтверждение", callback_data="admin:pending")
     kb.button(text="Активные заявки", callback_data="admin:active")
     kb.button(text="Назад", callback_data="admin:menu:root")
-    kb.adjust(1)
+    kb.adjust(2, 1)
     return kb.as_markup()
 
 
 def admin_archive_menu_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Архивация сейчас", callback_data="admin:archive:run")
-    kb.button(text="Архивные записи", callback_data="admin:archive:list")
+    kb.button(text="Запустить архивацию", callback_data="admin:archive:run")
+    kb.button(text="Список архива", callback_data="admin:archive:list")
     kb.button(text="Назад", callback_data="admin:menu:root")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_months_kb(prefix: str, month_offset: int = 0, back_callback: str = "admin:menu:schedule") -> InlineKeyboardMarkup:
+    now = datetime.now()
+    months: list[tuple[int, int]] = []
+    for i in range(month_offset, month_offset + 6):
+        month_index = now.month - 1 + i
+        year = now.year + month_index // 12
+        month = month_index % 12 + 1
+        months.append((year, month))
+
+    month_names = {
+        1: "Янв",
+        2: "Фев",
+        3: "Мар",
+        4: "Апр",
+        5: "Май",
+        6: "Июн",
+        7: "Июл",
+        8: "Авг",
+        9: "Сен",
+        10: "Окт",
+        11: "Ноя",
+        12: "Дек",
+    }
+
+    kb = InlineKeyboardBuilder()
+    for year, month in months:
+        kb.button(text=f"{month_names[month]} {year}", callback_data=f"{prefix}:month:{year}-{month:02d}")
+    kb.button(text="Раньше", callback_data=f"{prefix}:monthpage:{max(0, month_offset - 6)}")
+    kb.button(text="Позже", callback_data=f"{prefix}:monthpage:{month_offset + 6}")
+    kb.button(text="Назад", callback_data=back_callback)
+    kb.adjust(2, 2, 1)
+    return kb.as_markup()
+
+
+def admin_days_in_month_kb(
+    prefix: str,
+    year: int,
+    month: int,
+    back_callback: str,
+) -> InlineKeyboardMarkup:
+    today = date.today()
+    _, last_day = calendar.monthrange(year, month)
+    kb = InlineKeyboardBuilder()
+    for day in range(1, last_day + 1):
+        current = date(year, month, day)
+        if current < today:
+            continue
+        kb.button(text=f"{day:02d}", callback_data=f"{prefix}:day:{current.isoformat()}")
+    kb.button(text="К месяцам", callback_data=back_callback)
+    kb.adjust(7)
+    return kb.as_markup()
+
+
+def admin_start_hour_kb(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for hour in range(6, 23):
+        kb.button(text=f"{hour:02d}:00", callback_data=f"{prefix}:start:{hour}")
+    kb.button(text="Назад", callback_data=back_callback)
+    kb.adjust(4)
+    return kb.as_markup()
+
+
+def admin_end_hour_kb(prefix: str, start_hour: int, back_callback: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for hour in range(start_hour + 1, 25):
+        label = "00:00" if hour == 24 else f"{hour:02d}:00"
+        kb.button(text=label, callback_data=f"{prefix}:end:{hour}")
+    kb.button(text="Назад", callback_data=back_callback)
+    kb.adjust(4)
     return kb.as_markup()
 
 
@@ -202,7 +275,7 @@ def pending_action_kb(booking_id: int) -> InlineKeyboardMarkup:
 def admin_active_action_kb(booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Отменить запись", callback_data=f"admin:cancel:{booking_id}")]
+            [InlineKeyboardButton(text="Удалить запись", callback_data=f"admin:cancel:{booking_id}")]
         ]
     )
 

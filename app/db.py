@@ -552,6 +552,28 @@ class Database:
         await self.pool.execute("DELETE FROM booking_slots WHERE booking_id = $1", booking_id)
         return True
 
+    async def delete_booking_cascade(self, booking_id: int) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                booking = await conn.fetchrow(
+                    """
+                    SELECT b.id, b.user_tg_id, b.booking_date, c.name AS city_name,
+                           b.total_price, b.currency,
+                           ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+                    FROM bookings b
+                    JOIN cities c ON c.id = b.city_id
+                    LEFT JOIN booking_slots bs ON bs.booking_id = b.id
+                    WHERE b.id = $1
+                    GROUP BY b.id, c.name
+                    """,
+                    booking_id,
+                )
+                if not booking:
+                    return {"deleted": False, "booking": None}
+
+                await self._delete_bookings_with_relations(conn, [booking_id])
+                return {"deleted": True, "booking": booking}
+
     async def user_bookings(self, user_tg_id: int) -> List[asyncpg.Record]:
         return await self.pool.fetch(
             """

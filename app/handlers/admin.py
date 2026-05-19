@@ -14,8 +14,12 @@ from app.keyboards import (
     admin_active_action_kb,
     admin_bookings_menu_kb,
     admin_cities_menu_kb,
+    admin_days_in_month_kb,
     admin_menu_kb,
+    admin_months_kb,
     admin_schedule_menu_kb,
+    admin_end_hour_kb,
+    admin_start_hour_kb,
     archive_delete_confirm_kb,
     archived_item_kb,
     cities_kb,
@@ -198,9 +202,73 @@ async def admin_set_window_start(callback: CallbackQuery, state: FSMContext, db:
 @router.callback_query(F.data.startswith("adminwindow:city:"))
 async def admin_set_window_city(callback: CallbackQuery, state: FSMContext) -> None:
     city_id = int(callback.data.split(":")[-1])
-    await state.update_data(city_id=city_id)
+    await state.update_data(city_id=city_id, month_offset=0)
     await state.set_state(AdminWorkingWindowState.waiting_date)
-    await callback.message.answer("Введите дату в формате YYYY-MM-DD")
+    await callback.message.answer(
+        "Выберите месяц",
+        reply_markup=admin_months_kb("adminwindow", 0, "admin:set_window"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindow:monthpage:"))
+async def admin_set_window_month_page(callback: CallbackQuery, state: FSMContext) -> None:
+    offset = int(callback.data.split(":")[-1])
+    await state.update_data(month_offset=offset)
+    await callback.message.edit_reply_markup(
+        reply_markup=admin_months_kb("adminwindow", offset, "admin:set_window")
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindow:month:"))
+async def admin_set_window_month(callback: CallbackQuery, state: FSMContext) -> None:
+    ym = callback.data.split(":")[-1]
+    year, month = [int(x) for x in ym.split("-")]
+    await state.update_data(selected_month=ym)
+    await callback.message.answer(
+        f"Выберите день {month:02d}.{year}",
+        reply_markup=admin_days_in_month_kb("adminwindow", year, month, "admin:set_window"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindow:day:"))
+async def admin_set_window_day(callback: CallbackQuery, state: FSMContext) -> None:
+    work_date = callback.data.split(":")[-1]
+    await state.update_data(work_date=work_date)
+    await state.set_state(AdminWorkingWindowState.waiting_hours)
+    await callback.message.answer(
+        "Выберите начало рабочего дня",
+        reply_markup=admin_start_hour_kb("adminwindow", "admin:set_window"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindow:start:"))
+async def admin_set_window_start_hour(callback: CallbackQuery, state: FSMContext) -> None:
+    start_hour = int(callback.data.split(":")[-1])
+    await state.update_data(start_hour=start_hour)
+    await callback.message.answer(
+        "Выберите окончание рабочего дня",
+        reply_markup=admin_end_hour_kb("adminwindow", start_hour, "admin:set_window"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminwindow:end:"))
+async def admin_set_window_end_hour(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    end_hour = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    ok, info = await db.set_working_window(
+        city_id=int(data["city_id"]),
+        work_date=_parse_date(data["work_date"]),
+        start_hour=int(data["start_hour"]),
+        end_hour=end_hour,
+        created_by=callback.from_user.id,
+    )
+    await state.clear()
+    await callback.message.answer(info if ok else f"Ошибка: {info}", reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -365,9 +433,73 @@ async def admin_add_block_start(callback: CallbackQuery, state: FSMContext, db: 
 @router.callback_query(F.data.startswith("adminblock:city:"))
 async def admin_add_block_city(callback: CallbackQuery, state: FSMContext) -> None:
     city_id = int(callback.data.split(":")[-1])
-    await state.update_data(city_id=city_id)
+    await state.update_data(city_id=city_id, month_offset=0)
     await state.set_state(AdminBlockState.waiting_date)
-    await callback.message.answer("Введите дату блокировки YYYY-MM-DD")
+    await callback.message.answer(
+        "Выберите месяц блокировки",
+        reply_markup=admin_months_kb("adminblock", 0, "admin:add_block"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminblock:monthpage:"))
+async def admin_block_month_page(callback: CallbackQuery, state: FSMContext) -> None:
+    offset = int(callback.data.split(":")[-1])
+    await state.update_data(month_offset=offset)
+    await callback.message.edit_reply_markup(
+        reply_markup=admin_months_kb("adminblock", offset, "admin:add_block")
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminblock:month:"))
+async def admin_block_month(callback: CallbackQuery, state: FSMContext) -> None:
+    ym = callback.data.split(":")[-1]
+    year, month = [int(x) for x in ym.split("-")]
+    await state.update_data(selected_month=ym)
+    await callback.message.answer(
+        f"Выберите день {month:02d}.{year}",
+        reply_markup=admin_days_in_month_kb("adminblock", year, month, "admin:add_block"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminblock:day:"))
+async def admin_block_day(callback: CallbackQuery, state: FSMContext) -> None:
+    block_date = callback.data.split(":")[-1]
+    await state.update_data(block_date=block_date)
+    await state.set_state(AdminBlockState.waiting_hours)
+    await callback.message.answer(
+        "Выберите начало интервала",
+        reply_markup=admin_start_hour_kb("adminblock", "admin:add_block"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminblock:start:"))
+async def admin_block_start_hour(callback: CallbackQuery, state: FSMContext) -> None:
+    start_hour = int(callback.data.split(":")[-1])
+    await state.update_data(start_hour=start_hour)
+    await callback.message.answer(
+        "Выберите окончание интервала",
+        reply_markup=admin_end_hour_kb("adminblock", start_hour, "admin:add_block"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adminblock:end:"))
+async def admin_block_end_hour(callback: CallbackQuery, state: FSMContext) -> None:
+    end_hour = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    await state.update_data(end_hour=end_hour)
+    await state.set_state(AdminBlockState.waiting_reason)
+    await callback.message.answer(
+        (
+            f"Выбрано: {data['start_hour']:02d}:00-{end_hour:02d}:00\n"
+            "Введите причину блокировки текстом"
+        ),
+        reply_markup=simple_back_kb("admin:add_block"),
+    )
     await callback.answer()
 
 
@@ -495,25 +627,21 @@ async def admin_cancel_booking(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
     booking_id = int(callback.data.split(":")[-1])
-    booking = await db.get_booking(booking_id)
-    if not booking:
+    result = await db.delete_booking_cascade(booking_id)
+    booking = result["booking"]
+    if not result["deleted"] or not booking:
         await callback.answer("Запись не найдена", show_alert=True)
-        return
-
-    ok = await db.cancel_booking(booking_id, callback.from_user.id)
-    if not ok:
-        await callback.answer("Запись уже неактивна", show_alert=True)
         return
 
     await callback.bot.send_message(
         booking["user_tg_id"],
         (
-            f"Запись #{booking_id} отменена администратором.\n"
+            f"Запись #{booking_id} удалена администратором.\n"
             f"{booking['city_name']} {booking['booking_date'].strftime('%d.%m.%Y')}\n"
             f"Часы: {format_slots(booking['hours'])}"
         ),
     )
-    await callback.message.answer("Запись отменена.", reply_markup=admin_bookings_menu_kb())
+    await callback.message.answer("Запись удалена.", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
