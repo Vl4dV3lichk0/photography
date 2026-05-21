@@ -731,7 +731,7 @@ class Database:
         rows = await self.pool.fetch("SELECT tg_id FROM admins")
         return [int(r["tg_id"]) for r in rows]
 
-    async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int | None = None) -> int:
+    async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int) -> int:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 targets = await conn.fetch(
