@@ -46,12 +46,12 @@ class Database:
         sql = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         async with self.pool.acquire() as conn:
             await conn.execute(sql)
-            # Keep slot uniqueness stable: non-active bookings must not hold hours.
+            # Keep slot uniqueness stable: canceled/rejected bookings must not hold hours.
             await conn.execute(
                 """
                 DELETE FROM booking_slots
                 WHERE booking_id IN (
-                    SELECT id FROM bookings WHERE status IN ('canceled', 'rejected', 'archived')
+                    SELECT id FROM bookings WHERE status IN ('canceled', 'rejected')
                 )
                 """
             )
@@ -754,10 +754,6 @@ class Database:
                     return 0
 
                 ids = [r["id"] for r in archived_ids]
-                await conn.execute(
-                    "DELETE FROM booking_slots WHERE booking_id = ANY($1::bigint[])",
-                    ids,
-                )
 
                 if actor_tg_id:
                     for bid in ids:
@@ -773,14 +769,16 @@ class Database:
             SELECT b.id,
                    b.booking_date,
                    c.name AS city_name,
+                   b.total_price,
+                   b.currency,
                    bas.archived_at,
-                   COALESCE(ARRAY_AGG(bs.hour ORDER BY bs.hour) FILTER (WHERE bs.hour IS NOT NULL), ARRAY[]::SMALLINT[]) AS hours
+                   ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
             FROM bookings b
             JOIN cities c ON c.id = b.city_id
-            LEFT JOIN booking_slots bs ON bs.booking_id = b.id
+            JOIN booking_slots bs ON bs.booking_id = b.id
             LEFT JOIN booking_archive_snapshots bas ON bas.booking_id = b.id
             WHERE b.status = 'archived'
-            GROUP BY b.id, c.name, bas.archived_at
+            GROUP BY b.id, c.name, b.total_price, b.currency, bas.archived_at
             ORDER BY b.booking_date DESC, b.id DESC
             LIMIT $1
             """,

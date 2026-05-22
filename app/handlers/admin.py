@@ -794,6 +794,7 @@ async def admin_archive_list(callback: CallbackQuery, db: Database, state: FSMCo
                 f"Архив #{row['id']}\n"
                 f"{row['city_name']} {row['booking_date'].strftime('%d.%m.%Y')}\n"
                 f"Часы: {format_slots(row['hours'])}\n"
+                f"Итог: {row['total_price']} {row['currency']}\n"
                 f"Архивировано: {archived_at}"
             ),
             reply_markup=archived_item_kb(row["id"]),
