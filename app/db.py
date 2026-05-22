@@ -731,7 +731,7 @@ class Database:
         rows = await self.pool.fetch("SELECT tg_id FROM admins")
         return [int(r["tg_id"]) for r in rows]
 
-    async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int | None = None) -> int:
+    async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int = 0) -> int:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 targets = await conn.fetch(
@@ -782,31 +782,52 @@ class Database:
                         """,
                         booking_id,
                     )
-                    await conn.execute(
-                        """
-                        INSERT INTO booking_archive_snapshots (booking_id, snapshot, archived_by)
-                        VALUES ($1, $2, $3::bigint)
-                        ON CONFLICT (booking_id)
-                        DO UPDATE SET snapshot = EXCLUDED.snapshot,
-                                      archived_at = NOW(),
-                                      archived_by = EXCLUDED.archived_by
-                        """,
-                        booking_id,
-                        snapshot,
-                        actor_tg_id,
-                    )
+                    if actor_tg_id:
+                        await conn.execute(
+                            """
+                            INSERT INTO booking_archive_snapshots (booking_id, snapshot, archived_by)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (booking_id)
+                            DO UPDATE SET snapshot = EXCLUDED.snapshot,
+                                          archived_at = NOW(),
+                                          archived_by = EXCLUDED.archived_by
+                            """,
+                            booking_id,
+                            snapshot,
+                            actor_tg_id,
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO booking_events_audit (booking_id, event_type, actor_tg_id, payload)
+                            VALUES ($1, 'booking_archived', $2, jsonb_build_object('prev_status', $3))
+                            """,
+                            booking_id,
+                            actor_tg_id,
+                            prev_status,
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            INSERT INTO booking_archive_snapshots (booking_id, snapshot)
+                            VALUES ($1, $2)
+                            ON CONFLICT (booking_id)
+                            DO UPDATE SET snapshot = EXCLUDED.snapshot,
+                                          archived_at = NOW()
+                            """,
+                            booking_id,
+                            snapshot,
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO booking_events_audit (booking_id, event_type, payload)
+                            VALUES ($1, 'booking_archived', jsonb_build_object('prev_status', $2))
+                            """,
+                            booking_id,
+                            prev_status,
+                        )
                     await conn.execute(
                         "UPDATE bookings SET status = 'archived', updated_at = NOW() WHERE id = $1",
                         booking_id,
-                    )
-                    await conn.execute(
-                        """
-                        INSERT INTO booking_events_audit (booking_id, event_type, actor_tg_id, payload)
-                        VALUES ($1, 'booking_archived', $2::bigint, jsonb_build_object('prev_status', $3))
-                        """,
-                        booking_id,
-                        actor_tg_id,
-                        prev_status,
                     )
                 return len(targets)
 

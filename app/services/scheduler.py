@@ -53,7 +53,7 @@ async def _send_daily_summary(bot: Bot, db: Database, settings: Settings) -> Non
 async def notifications_loop(bot: Bot, db: Database, settings: Settings) -> None:
     while True:
         try:
-            await db.archive_expired_bookings(settings.timezone, None)
+            await db.archive_expired_bookings(settings.timezone)
             await _send_reminders(bot, db)
             await _send_daily_summary(bot, db, settings)
         except Exception as exc:
