@@ -734,68 +734,37 @@ class Database:
     async def archive_expired_bookings(self, timezone_name: str, actor_tg_id: int = 0) -> int:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                targets = await conn.fetch(
+                archived_ids = await conn.fetch(
                     """
-                    SELECT b.id, b.status
-                    FROM bookings b
-                    JOIN booking_slots bs ON bs.booking_id = b.id
-                    WHERE b.status IN ('pending', 'confirmed')
-                    GROUP BY b.id, b.status
-                    HAVING (b.booking_date::timestamp + ((MAX(bs.hour) + 1)::text || ' hours')::interval)
-                           <= timezone($1, NOW())
+                    UPDATE bookings SET status = 'archived', updated_at = NOW()
+                    WHERE status IN ('pending', 'confirmed')
+                    AND id IN (
+                        SELECT b.id FROM bookings b
+                        JOIN booking_slots bs ON bs.booking_id = b.id
+                        GROUP BY b.id, b.booking_date
+                        HAVING (b.booking_date::timestamp + ((MAX(bs.hour) + 1)::text || ' hours')::interval)
+                               <= timezone($1, NOW())
+                    )
+                    RETURNING id
                     """,
                     timezone_name,
                 )
-                if not targets:
+                if not archived_ids:
                     return 0
 
-                is_manual = bool(actor_tg_id)
-                for row in targets:
-                    booking_id = int(row["id"])
-                    prev_status = str(row["status"])
+                ids = [r["id"] for r in archived_ids]
+                await conn.execute(
+                    "DELETE FROM booking_slots WHERE booking_id = ANY($1::bigint[])",
+                    ids,
+                )
 
-                    snapshot = await conn.fetchval(
-                        """
-                        SELECT jsonb_build_object(
-                            'booking', to_jsonb(b),
-                            'city_name', c.name
-                        )
-                        FROM bookings b
-                        JOIN cities c ON c.id = b.city_id
-                        WHERE b.id = $1
-                        """,
-                        booking_id,
-                    )
-
-                    if is_manual:
+                if actor_tg_id:
+                    for bid in ids:
                         await conn.execute(
-                            "INSERT INTO booking_archive_snapshots (booking_id, snapshot, archived_by) VALUES ($1, $2, $3)",
-                            booking_id, snapshot, actor_tg_id,
+                            "INSERT INTO booking_events_audit (booking_id, event_type, actor_tg_id, payload) VALUES ($1, 'booking_archived', $2, jsonb_build_object('prev_status', 'confirmed'))",
+                            bid, actor_tg_id,
                         )
-                        await conn.execute(
-                            "INSERT INTO booking_events_audit (booking_id, event_type, actor_tg_id, payload) VALUES ($1, 'booking_archived', $2, jsonb_build_object('prev_status', $3))",
-                            booking_id, actor_tg_id, prev_status,
-                        )
-                    else:
-                        await conn.execute(
-                            "INSERT INTO booking_archive_snapshots (booking_id, snapshot) VALUES ($1, $2)",
-                            booking_id, snapshot,
-                        )
-                        await conn.execute(
-                            "INSERT INTO booking_events_audit (booking_id, event_type, payload) VALUES ($1, 'booking_archived', jsonb_build_object('prev_status', $2))",
-                            booking_id, prev_status,
-                        )
-
-                    await conn.execute(
-                        "DELETE FROM booking_slots WHERE booking_id = $1",
-                        booking_id,
-                    )
-                    await conn.execute(
-                        "UPDATE bookings SET status = 'archived', updated_at = NOW() WHERE id = $1",
-                        booking_id,
-                    )
-
-                return len(targets)
+                return len(ids)
 
     async def list_archived(self, limit: int = 20) -> List[asyncpg.Record]:
         return await self.pool.fetch(
@@ -804,10 +773,10 @@ class Database:
                    b.booking_date,
                    c.name AS city_name,
                    bas.archived_at,
-                   ARRAY_AGG(bs.hour ORDER BY bs.hour) AS hours
+                   COALESCE(ARRAY_AGG(bs.hour ORDER BY bs.hour) FILTER (WHERE bs.hour IS NOT NULL), ARRAY[]::SMALLINT[]) AS hours
             FROM bookings b
             JOIN cities c ON c.id = b.city_id
-            JOIN booking_slots bs ON bs.booking_id = b.id
+            LEFT JOIN booking_slots bs ON bs.booking_id = b.id
             LEFT JOIN booking_archive_snapshots bas ON bas.booking_id = b.id
             WHERE b.status = 'archived'
             GROUP BY b.id, c.name, bas.archived_at
