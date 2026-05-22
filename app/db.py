@@ -659,6 +659,7 @@ class Database:
         )
 
     async def due_reminders(self, hours_before: int) -> List[asyncpg.Record]:
+        hours_str = str(hours_before)
         return await self.pool.fetch(
             """
             WITH grouped AS (
@@ -683,7 +684,7 @@ class Database:
                   AND nl.sent_to = g.user_tg_id
               )
             """,
-            hours_before,
+            hours_str,
         )
 
     async def mark_notified(self, kind: str, ref_id: int, sent_to: int) -> None:
