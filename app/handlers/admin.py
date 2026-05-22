@@ -85,7 +85,7 @@ async def admin_add_city_start(callback: CallbackQuery, state: FSMContext, db: D
     if not await _ensure_admin(callback, db):
         return
     await state.set_state(AdminAddCityState.waiting_city_name)
-    await callback.message.answer("Введите название города", reply_markup=simple_back_kb("admin:menu:cities"))
+    await callback.message.edit_text("Введите название города", reply_markup=simple_back_kb("admin:menu:cities"))
     await callback.answer()
 
 
@@ -102,7 +102,7 @@ async def admin_add_city_save(message: Message, state: FSMContext, db: Database)
 async def admin_menu_root(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
-    await callback.message.answer("Главное меню администратора", reply_markup=admin_menu_kb())
+    await callback.message.edit_text("Главное меню администратора", reply_markup=admin_menu_kb())
     await callback.answer()
 
 
@@ -110,7 +110,7 @@ async def admin_menu_root(callback: CallbackQuery, db: Database) -> None:
 async def admin_menu_cities(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
-    await callback.message.answer("Раздел: Города", reply_markup=admin_cities_menu_kb())
+    await callback.message.edit_text("Раздел: Города", reply_markup=admin_cities_menu_kb())
     await callback.answer()
 
 
@@ -120,14 +120,14 @@ async def admin_cities_list(callback: CallbackQuery, db: Database) -> None:
         return
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Список городов пуст.", reply_markup=admin_cities_menu_kb())
+        await callback.message.edit_text("Список городов пуст.", reply_markup=admin_cities_menu_kb())
         await callback.answer()
         return
 
     lines = ["Активные города:"]
     for city in cities:
         lines.append(f"- {city['name']}")
-    await callback.message.answer("\n".join(lines), reply_markup=admin_cities_menu_kb())
+    await callback.message.edit_text("\n".join(lines), reply_markup=admin_cities_menu_kb())
     await callback.answer()
 
 
@@ -135,7 +135,7 @@ async def admin_cities_list(callback: CallbackQuery, db: Database) -> None:
 async def admin_menu_schedule(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
-    await callback.message.answer("Раздел: Расписание", reply_markup=admin_schedule_menu_kb())
+    await callback.message.edit_text("Раздел: Расписание", reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -145,7 +145,7 @@ async def admin_schedule_available(callback: CallbackQuery, db: Database) -> Non
         return
     rows = await db.schedule_preview(days=120, limit=50)
     if not rows:
-        await callback.message.answer("Свободных окон для записи пока нет.", reply_markup=admin_schedule_menu_kb())
+        await callback.message.edit_text("Свободных окон для записи пока нет.", reply_markup=admin_schedule_menu_kb())
         await callback.answer()
         return
 
@@ -154,7 +154,7 @@ async def admin_schedule_available(callback: CallbackQuery, db: Database) -> Non
         chunks.append(
             f"- {row['city_name']}: {row['work_date'].strftime('%d.%m.%Y')} {format_hour_ranges(row['free_hours'])}"
         )
-    await callback.message.answer("\n".join(chunks), reply_markup=admin_schedule_menu_kb())
+    await callback.message.edit_text("\n".join(chunks), reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -162,7 +162,7 @@ async def admin_schedule_available(callback: CallbackQuery, db: Database) -> Non
 async def admin_menu_bookings(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
-    await callback.message.answer("Раздел: Записи", reply_markup=admin_bookings_menu_kb())
+    await callback.message.edit_text("Раздел: Записи", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -170,7 +170,7 @@ async def admin_menu_bookings(callback: CallbackQuery, db: Database) -> None:
 async def admin_menu_archive(callback: CallbackQuery, db: Database) -> None:
     if not await _ensure_admin(callback, db):
         return
-    await callback.message.answer("Раздел: Архив", reply_markup=admin_archive_menu_kb())
+    await callback.message.edit_text("Раздел: Архив", reply_markup=admin_archive_menu_kb())
     await callback.answer()
 
 
@@ -180,10 +180,10 @@ async def admin_delete_city_start(callback: CallbackQuery, db: Database) -> None
         return
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Активных городов нет.", reply_markup=admin_cities_menu_kb())
+        await callback.message.edit_text("Активных городов нет.", reply_markup=admin_cities_menu_kb())
         await callback.answer()
         return
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите город для удаления",
         reply_markup=cities_kb(cities, "admincitydelete", "admin:menu:cities"),
     )
@@ -207,7 +207,7 @@ async def admin_delete_city_confirm(callback: CallbackQuery, db: Database) -> No
                     f"Часы: {format_slots(row['hours'])}"
                 ),
             )
-    await callback.message.answer(
+    await callback.message.edit_text(
         (
             f"Город удален. Отменено заявок: {len(result['affected'])}"
             if result["removed"]
@@ -224,11 +224,11 @@ async def admin_set_window_start(callback: CallbackQuery, state: FSMContext, db:
         return
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Сначала добавьте хотя бы один город.")
+        await callback.message.edit_text("Сначала добавьте хотя бы один город.")
         await callback.answer()
         return
     await state.set_state(AdminWorkingWindowState.waiting_city)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите город",
         reply_markup=cities_kb(cities, "adminwindow", "admin:menu:schedule"),
     )
@@ -240,7 +240,7 @@ async def admin_set_window_city(callback: CallbackQuery, state: FSMContext) -> N
     city_id = int(callback.data.split(":")[-1])
     await state.update_data(city_id=city_id, month_offset=0)
     await state.set_state(AdminWorkingWindowState.waiting_date)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите месяц",
         reply_markup=admin_months_kb("adminwindow", 0, "admin:set_window"),
     )
@@ -262,7 +262,7 @@ async def admin_set_window_month(callback: CallbackQuery, state: FSMContext) -> 
     ym = callback.data.split(":")[-1]
     year, month = [int(x) for x in ym.split("-")]
     await state.update_data(selected_month=ym)
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Выберите день {month:02d}.{year}",
         reply_markup=admin_days_in_month_kb("adminwindow", year, month, "admin:set_window"),
     )
@@ -274,7 +274,7 @@ async def admin_set_window_day(callback: CallbackQuery, state: FSMContext) -> No
     work_date = callback.data.split(":")[-1]
     await state.update_data(work_date=work_date)
     await state.set_state(AdminWorkingWindowState.waiting_hours)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите начало рабочего дня",
         reply_markup=admin_start_hour_kb("adminwindow", "admin:set_window"),
     )
@@ -285,7 +285,7 @@ async def admin_set_window_day(callback: CallbackQuery, state: FSMContext) -> No
 async def admin_set_window_start_hour(callback: CallbackQuery, state: FSMContext) -> None:
     start_hour = int(callback.data.split(":")[-1])
     await state.update_data(start_hour=start_hour)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите окончание рабочего дня",
         reply_markup=admin_end_hour_kb("adminwindow", start_hour, "admin:set_window"),
     )
@@ -304,7 +304,7 @@ async def admin_set_window_end_hour(callback: CallbackQuery, state: FSMContext, 
         created_by=callback.from_user.id,
     )
     await state.clear()
-    await callback.message.answer(info if ok else f"Ошибка: {info}", reply_markup=admin_schedule_menu_kb())
+    await callback.message.edit_text(info if ok else f"Ошибка: {info}", reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -350,10 +350,10 @@ async def admin_window_delete_start(callback: CallbackQuery, db: Database) -> No
         return
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Нет активных городов.", reply_markup=admin_schedule_menu_kb())
+        await callback.message.edit_text("Нет активных городов.", reply_markup=admin_schedule_menu_kb())
         await callback.answer()
         return
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите город для удаления даты",
         reply_markup=cities_kb(cities, "adminwindelcity", "admin:menu:schedule"),
     )
@@ -368,10 +368,10 @@ async def admin_window_delete_city(callback: CallbackQuery, db: Database) -> Non
     city = await db.get_city(city_id)
     dates = [row["work_date"] for row in await db.city_work_dates(city_id)]
     if not dates:
-        await callback.message.answer("Для города нет дат расписания.", reply_markup=admin_schedule_menu_kb())
+        await callback.message.edit_text("Для города нет дат расписания.", reply_markup=admin_schedule_menu_kb())
         await callback.answer()
         return
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Выберите дату для удаления ({city['name']})",
         reply_markup=date_choice_kb(dates, f"adminwindeldate:{city_id}", "admin:menu:schedule"),
     )
@@ -391,7 +391,7 @@ async def admin_window_delete_date(callback: CallbackQuery, state: FSMContext, d
     if result["requires_confirmation"]:
         await state.set_state(AdminWindowDeleteState.waiting_active_confirm)
         await state.update_data(city_id=city_id, work_date=day.isoformat())
-        await callback.message.answer(
+        await callback.message.edit_text(
             (
                 f"На дату {day.strftime('%d.%m.%Y')} есть активные заявки: {len(result['affected'])}.\n"
                 "Если подтвердить удаление, все эти записи будут отменены и клиенты получат уведомления."
@@ -401,7 +401,7 @@ async def admin_window_delete_date(callback: CallbackQuery, state: FSMContext, d
         await callback.answer()
         return
 
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Дата расписания удалена." if result["removed"] else "Не удалось удалить дату.",
         reply_markup=admin_schedule_menu_kb(),
     )
@@ -411,7 +411,7 @@ async def admin_window_delete_date(callback: CallbackQuery, state: FSMContext, d
 @router.callback_query(F.data == "admin:window:delete:abort")
 async def admin_window_delete_abort(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await callback.message.answer("Удаление даты отменено.", reply_markup=admin_schedule_menu_kb())
+    await callback.message.edit_text("Удаление даты отменено.", reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -440,12 +440,12 @@ async def admin_window_delete_force(callback: CallbackQuery, state: FSMContext, 
         )
     await state.clear()
     if result["removed"]:
-        await callback.message.answer(
+        await callback.message.edit_text(
             f"Дата удалена. Отменено заявок: {len(result['affected'])}",
             reply_markup=admin_schedule_menu_kb(),
         )
     else:
-        await callback.message.answer("Не удалось удалить дату.", reply_markup=admin_schedule_menu_kb())
+        await callback.message.edit_text("Не удалось удалить дату.", reply_markup=admin_schedule_menu_kb())
     await callback.answer()
 
 
@@ -455,11 +455,11 @@ async def admin_add_block_start(callback: CallbackQuery, state: FSMContext, db: 
         return
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Нет городов. Сначала добавьте город.")
+        await callback.message.edit_text("Нет городов. Сначала добавьте город.")
         await callback.answer()
         return
     await state.set_state(AdminBlockState.waiting_city)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Город для блокировки",
         reply_markup=cities_kb(cities, "adminblock", "admin:menu:schedule"),
     )
@@ -471,7 +471,7 @@ async def admin_add_block_city(callback: CallbackQuery, state: FSMContext) -> No
     city_id = int(callback.data.split(":")[-1])
     await state.update_data(city_id=city_id, month_offset=0)
     await state.set_state(AdminBlockState.waiting_date)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите месяц блокировки",
         reply_markup=admin_months_kb("adminblock", 0, "admin:add_block"),
     )
@@ -493,7 +493,7 @@ async def admin_block_month(callback: CallbackQuery, state: FSMContext) -> None:
     ym = callback.data.split(":")[-1]
     year, month = [int(x) for x in ym.split("-")]
     await state.update_data(selected_month=ym)
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Выберите день {month:02d}.{year}",
         reply_markup=admin_days_in_month_kb("adminblock", year, month, "admin:add_block"),
     )
@@ -505,7 +505,7 @@ async def admin_block_day(callback: CallbackQuery, state: FSMContext) -> None:
     block_date = callback.data.split(":")[-1]
     await state.update_data(block_date=block_date)
     await state.set_state(AdminBlockState.waiting_hours)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите начало интервала",
         reply_markup=admin_start_hour_kb("adminblock", "admin:add_block"),
     )
@@ -516,7 +516,7 @@ async def admin_block_day(callback: CallbackQuery, state: FSMContext) -> None:
 async def admin_block_start_hour(callback: CallbackQuery, state: FSMContext) -> None:
     start_hour = int(callback.data.split(":")[-1])
     await state.update_data(start_hour=start_hour)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите окончание интервала",
         reply_markup=admin_end_hour_kb("adminblock", start_hour, "admin:add_block"),
     )
@@ -529,7 +529,7 @@ async def admin_block_end_hour(callback: CallbackQuery, state: FSMContext) -> No
     data = await state.get_data()
     await state.update_data(end_hour=end_hour)
     await state.set_state(AdminBlockState.waiting_reason)
-    await callback.message.answer(
+    await callback.message.edit_text(
         (
             f"Выбрано: {data['start_hour']:02d}:00-{end_hour:02d}:00\n"
             "Введите причину блокировки текстом"
@@ -603,7 +603,7 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
         return
     rows = await db.pending_bookings()
     if not rows:
-        await callback.message.answer("Нет заявок на подтверждение.")
+        await callback.message.edit_text("Нет заявок на подтверждение.")
         await callback.answer()
         return
 
@@ -623,7 +623,7 @@ async def admin_pending_list(callback: CallbackQuery, db: Database) -> None:
             f"Итог: {row['total_price']} {row['currency']}"
         )
         await callback.message.answer(txt, reply_markup=pending_action_kb(row["id"]))
-    await callback.message.answer("Действия с записями", reply_markup=admin_bookings_menu_kb())
+    await callback.message.edit_text("Действия с записями", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -634,7 +634,7 @@ async def admin_active_list(callback: CallbackQuery, db: Database) -> None:
 
     rows = await db.active_bookings()
     if not rows:
-        await callback.message.answer("Сейчас нет активных заявок.")
+        await callback.message.edit_text("Сейчас нет активных заявок.")
         await callback.answer()
         return
 
@@ -654,7 +654,7 @@ async def admin_active_list(callback: CallbackQuery, db: Database) -> None:
         else:
             await callback.message.answer(txt)
 
-    await callback.message.answer("Действия с записями", reply_markup=admin_bookings_menu_kb())
+    await callback.message.edit_text("Действия с записями", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -677,7 +677,7 @@ async def admin_cancel_booking(callback: CallbackQuery, db: Database) -> None:
             f"Часы: {format_slots(booking['hours'])}"
         ),
     )
-    await callback.message.answer("Запись удалена.", reply_markup=admin_bookings_menu_kb())
+    await callback.message.edit_text("Запись удалена.", reply_markup=admin_bookings_menu_kb())
     await callback.answer()
 
 
@@ -701,7 +701,7 @@ async def admin_approve(callback: CallbackQuery, db: Database) -> None:
                 f"Итог: {booking['total_price']} {booking['currency']}"
             ),
         )
-    await callback.message.answer(f"Заявка #{booking_id} подтверждена")
+    await callback.message.edit_text(f"Заявка #{booking_id} подтверждена")
     await callback.answer()
 
 
@@ -720,7 +720,7 @@ async def admin_reject(callback: CallbackQuery, db: Database) -> None:
             booking["user_tg_id"],
             f"К сожалению, заявка #{booking_id} отклонена. Выберите другое время через /start.",
         )
-    await callback.message.answer(f"Заявка #{booking_id} отклонена")
+    await callback.message.edit_text(f"Заявка #{booking_id} отклонена")
     await callback.answer()
 
 
@@ -730,7 +730,7 @@ async def admin_set_price_start(callback: CallbackQuery, state: FSMContext, db: 
         return
     pricing = await db.get_pricing()
     await state.set_state(AdminPriceState.waiting_hour_price)
-    await callback.message.answer(
+    await callback.message.edit_text(
         (
             f"Текущая цена: {pricing['hourly_price']} {pricing['currency']}\n"
             "Введите новую цену за 1 час (целое число, рубли)."
@@ -769,7 +769,7 @@ async def admin_archive_run(callback: CallbackQuery, db: Database, settings) -> 
     if not await _ensure_admin(callback, db):
         return
     archived = await db.archive_expired_bookings(settings.timezone, callback.from_user.id)
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Архивация завершена. Перенесено: {archived}",
         reply_markup=admin_archive_menu_kb(),
     )
@@ -783,7 +783,7 @@ async def admin_archive_list(callback: CallbackQuery, db: Database, state: FSMCo
     await state.clear()
     rows = await db.list_archived(limit=15)
     if not rows:
-        await callback.message.answer("Архив пуст.")
+        await callback.message.edit_text("Архив пуст.")
         await callback.answer()
         return
 
@@ -798,7 +798,7 @@ async def admin_archive_list(callback: CallbackQuery, db: Database, state: FSMCo
             ),
             reply_markup=archived_item_kb(row["id"]),
         )
-    await callback.message.answer("Действия с архивом", reply_markup=admin_archive_menu_kb())
+    await callback.message.edit_text("Действия с архивом", reply_markup=admin_archive_menu_kb())
     await callback.answer()
 
 
@@ -825,7 +825,7 @@ async def admin_archive_delete_start(callback: CallbackQuery, state: FSMContext,
     booking_id = int(callback.data.split(":")[-1])
     await state.set_state(AdminArchiveState.waiting_delete_confirmation)
     await state.update_data(delete_booking_id=booking_id)
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Удалить архивный снимок #{booking_id}? Это действие необратимо.",
         reply_markup=archive_delete_confirm_kb(booking_id),
     )
@@ -845,9 +845,9 @@ async def admin_archive_delete_confirm(callback: CallbackQuery, state: FSMContex
     deleted = await db.delete_archive_snapshot(booking_id)
     await state.clear()
     if deleted:
-        await callback.message.answer(f"Архивный снимок #{booking_id} удален.")
+        await callback.message.edit_text(f"Архивный снимок #{booking_id} удален.")
     else:
-        await callback.message.answer("Архивный снимок не найден.")
+        await callback.message.edit_text("Архивный снимок не найден.")
     await callback.answer()
 
 

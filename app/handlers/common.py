@@ -42,7 +42,7 @@ async def cmd_price(message: Message, db: Database) -> None:
 async def cb_price(callback: CallbackQuery, db: Database) -> None:
     pricing = await db.get_pricing()
     is_admin = await db.is_admin(callback.from_user.id)
-    await callback.message.answer(
+    await callback.message.edit_text(
         format_price_offer(pricing["hourly_price"], pricing["currency"]),
         reply_markup=admin_menu_kb() if is_admin else main_menu_kb(),
     )

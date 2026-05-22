@@ -84,7 +84,7 @@ async def cb_my(callback: CallbackQuery, db: Database) -> None:
 
     rows = await db.user_bookings(callback.from_user.id)
     if not rows:
-        await callback.message.answer("У вас пока нет записей.", reply_markup=main_menu_kb())
+        await callback.message.edit_text("У вас пока нет записей.", reply_markup=main_menu_kb())
         await callback.answer()
         return
 
@@ -110,13 +110,13 @@ async def book_start(callback: CallbackQuery, state: FSMContext, db: Database) -
 
     cities = await db.list_cities()
     if not cities:
-        await callback.message.answer("Пока нет активных городов. Попробуйте позже.")
+        await callback.message.edit_text("Пока нет активных городов. Попробуйте позже.")
         await callback.answer()
         return
 
     await state.clear()
     await state.set_state(ClientBookingState.waiting_city)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите город",
         reply_markup=cities_kb(cities, "book", "book:back:main"),
     )
@@ -126,7 +126,7 @@ async def book_start(callback: CallbackQuery, state: FSMContext, db: Database) -
 @router.callback_query(F.data == "book:back:main")
 async def book_back_main(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     await state.clear()
-    await callback.message.answer("Главное меню", reply_markup=main_menu_kb())
+    await callback.message.edit_text("Главное меню", reply_markup=main_menu_kb())
     await callback.answer()
 
 
@@ -175,13 +175,13 @@ async def book_city(callback: CallbackQuery, state: FSMContext, db: Database) ->
     city_id = int(callback.data.split(":")[-1])
     dates = [row["work_date"] for row in await db.available_dates(city_id)]
     if not dates:
-        await callback.message.answer("По этому городу пока нет дат.")
+        await callback.message.edit_text("По этому городу пока нет дат.")
         await callback.answer()
         return
 
     await state.update_data(city_id=city_id, selected_month="", day_page=0, hour_page=0)
     await state.set_state(ClientBookingState.waiting_month)
-    await callback.message.answer("Выберите месяц", reply_markup=months_kb(dates))
+    await callback.message.edit_text("Выберите месяц", reply_markup=months_kb(dates))
     await callback.answer()
 
 
@@ -189,7 +189,7 @@ async def book_city(callback: CallbackQuery, state: FSMContext, db: Database) ->
 async def back_to_cities(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     cities = await db.list_cities()
     await state.set_state(ClientBookingState.waiting_city)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите город",
         reply_markup=cities_kb(cities, "book", "book:back:main"),
     )
@@ -212,7 +212,7 @@ async def book_month(callback: CallbackQuery, state: FSMContext, db: Database) -
 
     await state.update_data(selected_month=ym, day_page=0)
     await state.set_state(ClientBookingState.waiting_day)
-    await callback.message.answer("Выберите день", reply_markup=days_kb(days, page=0))
+    await callback.message.edit_text("Выберите день", reply_markup=days_kb(days, page=0))
     await callback.answer()
 
 
@@ -244,7 +244,7 @@ async def back_to_months(callback: CallbackQuery, state: FSMContext, db: Databas
     city_id = int(data["city_id"])
     dates = [row["work_date"] for row in await db.available_dates(city_id)]
     await state.set_state(ClientBookingState.waiting_month)
-    await callback.message.answer("Выберите месяц", reply_markup=months_kb(dates))
+    await callback.message.edit_text("Выберите месяц", reply_markup=months_kb(dates))
     await callback.answer()
 
 
@@ -260,7 +260,7 @@ async def book_day(callback: CallbackQuery, state: FSMContext, db: Database) -> 
 
     await state.update_data(day=day.isoformat(), selected_hours=[], hour_page=0)
     await state.set_state(ClientBookingState.waiting_hours)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите один или несколько часов подряд",
         reply_markup=hours_kb(free_hours, [], page=0),
     )
@@ -296,7 +296,7 @@ async def back_to_days(callback: CallbackQuery, state: FSMContext, db: Database)
     if current_day:
         days = [d for d in days if d.year == current_day.year and d.month == current_day.month]
     await state.set_state(ClientBookingState.waiting_day)
-    await callback.message.answer("Выберите день", reply_markup=days_kb(days, page=current_page))
+    await callback.message.edit_text("Выберите день", reply_markup=days_kb(days, page=current_page))
     await callback.answer()
 
 
@@ -345,7 +345,7 @@ async def book_hours_done(callback: CallbackQuery, state: FSMContext, db: Databa
     pricing = await db.get_pricing()
     total = len(selected) * int(pricing["hourly_price"])
     await state.set_state(ClientBookingState.waiting_name)
-    await callback.message.answer(
+    await callback.message.edit_text(
         f"Выбрано часов: {len(selected)}\nПредварительный итог: {total} {pricing['currency']}"
     )
     await _prompt_name(callback.message)
@@ -384,6 +384,7 @@ async def book_comment(message: Message, state: FSMContext, db: Database) -> Non
 @router.callback_query(F.data.startswith("book:skip:"))
 async def book_skip_optional(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     target = callback.data.split(":")[-1]
+    await callback.message.edit_text(callback.message.text)
     if target == "name":
         await state.update_data(client_name=None)
         await state.set_state(ClientBookingState.waiting_phone)
@@ -413,7 +414,7 @@ async def back_to_hours_from_contact(callback: CallbackQuery, state: FSMContext,
     selected = [int(v) for v in data.get("selected_hours", [])]
     page = int(data.get("hour_page", 0))
     await state.set_state(ClientBookingState.waiting_hours)
-    await callback.message.answer(
+    await callback.message.edit_text(
         "Выберите один или несколько часов подряд",
         reply_markup=hours_kb(free_hours, selected, page=page),
     )
@@ -422,6 +423,7 @@ async def back_to_hours_from_contact(callback: CallbackQuery, state: FSMContext,
 
 @router.callback_query(F.data == "book:back:name")
 async def back_to_name(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text(callback.message.text)
     await state.set_state(ClientBookingState.waiting_name)
     await _prompt_name(callback.message)
     await callback.answer()
@@ -429,6 +431,7 @@ async def back_to_name(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "book:back:phone")
 async def back_to_phone(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text(callback.message.text)
     await state.set_state(ClientBookingState.waiting_phone)
     await _prompt_phone(callback.message)
     await callback.answer()
@@ -436,6 +439,7 @@ async def back_to_phone(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "book:back:shoot_type")
 async def back_to_shoot_type(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text(callback.message.text)
     await state.set_state(ClientBookingState.waiting_shoot_type)
     await _prompt_shoot_type(callback.message)
     await callback.answer()
@@ -443,6 +447,7 @@ async def back_to_shoot_type(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "book:back:comment")
 async def back_to_comment(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text(callback.message.text)
     await state.set_state(ClientBookingState.waiting_comment)
     await _prompt_comment(callback.message)
     await callback.answer()
@@ -451,7 +456,7 @@ async def back_to_comment(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "book:consent:no")
 async def book_consent_no(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await callback.message.answer("Заявка отменена.", reply_markup=main_menu_kb())
+    await callback.message.edit_text("Заявка отменена.", reply_markup=main_menu_kb())
     await callback.answer()
 
 
@@ -487,7 +492,7 @@ async def book_consent_yes(
         )
         booking_id = await db.create_booking(draft)
     except Exception as exc:
-        await callback.message.answer(f"Не удалось создать заявку: {exc}")
+        await callback.message.edit_text(f"Не удалось создать заявку: {exc}")
         await callback.answer()
         return
 
@@ -497,7 +502,7 @@ async def book_consent_yes(
         if callback.from_user.username
         else f"<a href=\"tg://user?id={callback.from_user.id}\">Клиент</a>"
     )
-    await callback.message.answer(
+    await callback.message.edit_text(
         (
             f"Заявка #{booking_id} создана и отправлена на подтверждение.\n"
             f"{city['name']} {draft.booking_date.strftime('%d.%m.%Y')}\n"
@@ -541,7 +546,7 @@ async def book_cancel(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("Запись уже неактивна", show_alert=True)
         return
 
-    await callback.message.answer(f"Запись #{booking_id} отменена")
+    await callback.message.edit_text(f"Запись #{booking_id} отменена")
     client_link = (
         f"@{callback.from_user.username}"
         if callback.from_user.username
