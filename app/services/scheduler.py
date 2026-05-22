@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -55,7 +56,6 @@ async def notifications_loop(bot: Bot, db: Database, settings: Settings) -> None
             await db.archive_expired_bookings(settings.timezone, None)
             await _send_reminders(bot, db)
             await _send_daily_summary(bot, db, settings)
-        except Exception:
-            # Loop must stay alive, errors are retried on next tick.
-            pass
+        except Exception as exc:
+            logging.exception("Scheduler error: %s", exc)
         await asyncio.sleep(60)
